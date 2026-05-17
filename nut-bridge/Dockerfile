@@ -8,9 +8,12 @@ RUN apt-get update && \
 
 COPY nut-bridge/ragtech-to-nut.sh /usr/local/bin/ragtech-to-nut
 COPY nut-bridge/entrypoint.sh /usr/local/bin/ragtech-nut-entrypoint
-RUN chmod +x /usr/local/bin/ragtech-to-nut /usr/local/bin/ragtech-nut-entrypoint
+COPY nut-bridge/healthcheck.sh /usr/local/bin/ragtech-nut-healthcheck
+RUN chmod +x /usr/local/bin/ragtech-to-nut /usr/local/bin/ragtech-nut-entrypoint /usr/local/bin/ragtech-nut-healthcheck
 
 EXPOSE 3493
 VOLUME /data
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD ["/usr/local/bin/ragtech-nut-healthcheck"]
 
 ENTRYPOINT ["/usr/local/bin/ragtech-nut-entrypoint"]

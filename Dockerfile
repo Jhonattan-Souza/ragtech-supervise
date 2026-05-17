@@ -25,7 +25,11 @@ RUN apt-get update && apt-get upgrade --yes && \
 
 COPY --from=build /opt/supervise /opt/supervise
 COPY init.sh /init.sh
+COPY healthcheck.sh /usr/local/bin/ragtech-supervise-healthcheck
+RUN chmod +x /usr/local/bin/ragtech-supervise-healthcheck
 
 EXPOSE 4470
 VOLUME /data
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD ["/usr/local/bin/ragtech-supervise-healthcheck"]
 ENTRYPOINT ["/init.sh"]
