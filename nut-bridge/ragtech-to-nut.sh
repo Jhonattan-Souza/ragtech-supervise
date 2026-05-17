@@ -82,10 +82,83 @@ write_state() {
 
   local query row
   query="
+WITH device AS (
+  SELECT id FROM DEVICELIST ORDER BY last DESC LIMIT 1
+),
+samples AS (
+  SELECT * FROM (
+    SELECT
+      'EVENTLOG' AS sample_source,
+      id,
+      dt,
+      event,
+      var_vInput,
+      var_vOutput,
+      var_iOutput,
+      var_pOutput,
+      var_fOutput,
+      var_vBattery,
+      var_cBattery,
+      var_temperature,
+      var_nominalVInput,
+      var_nominalVOutput,
+      var_nominalPOutput,
+      var_nominalFOutput,
+      var_nominalVBattery,
+      flag_connected,
+      flag_opBattery,
+      flag_opWarning,
+      flag_noVInput,
+      flag_loBattery,
+      flag_hiPOutput,
+      flag_noBattery,
+      fail_overload,
+      fail_endBattery
+    FROM EVENTLOG
+    WHERE id = (SELECT id FROM device)
+    ORDER BY dt DESC, event DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT * FROM (
+    SELECT
+      'HISTLOGHOUR' AS sample_source,
+      id,
+      dt,
+      event,
+      var_vInput,
+      var_vOutput,
+      var_iOutput,
+      var_pOutput,
+      var_fOutput,
+      var_vBattery,
+      var_cBattery,
+      var_temperature,
+      var_nominalVInput,
+      var_nominalVOutput,
+      var_nominalPOutput,
+      var_nominalFOutput,
+      var_nominalVBattery,
+      flag_connected,
+      flag_opBattery,
+      flag_opWarning,
+      flag_noVInput,
+      flag_loBattery,
+      flag_hiPOutput,
+      flag_noBattery,
+      fail_overload,
+      fail_endBattery
+    FROM HISTLOGHOUR
+    WHERE id = (SELECT id FROM device)
+    ORDER BY dt DESC, event DESC
+    LIMIT 1
+  )
+)
 SELECT
   COALESCE(e.id, ''),
   COALESCE(e.dt, 0),
   COALESCE(e.event, 0),
+  COALESCE(e.sample_source, ''),
   COALESCE(e.var_vInput, 0),
   COALESCE(e.var_vOutput, 0),
   COALESCE(e.var_iOutput, 0),
@@ -110,9 +183,9 @@ SELECT
   COALESCE(e.fail_endBattery, 0),
   COALESCE(NULLIF(d.userProd, ''), 'Supervise') AS model,
   COALESCE(NULLIF(d.version, ''), '') AS version
-FROM EVENTLOG e
+FROM samples e
 LEFT JOIN DEVICELIST d ON d.id = e.id
-ORDER BY e.dt DESC, e.event DESC
+ORDER BY e.dt DESC, e.event DESC, e.sample_source ASC
 LIMIT 1;"
 
   local query_error
@@ -130,13 +203,13 @@ LIMIT 1;"
     return
   fi
 
-  local id dt event v_input v_output i_output p_output f_output v_battery c_battery temperature
+  local id dt event sample_source v_input v_output i_output p_output f_output v_battery c_battery temperature
   local nominal_v_input nominal_v_output nominal_p_output nominal_f_output nominal_v_battery
   local flag_connected flag_op_battery flag_op_warning flag_no_v_input flag_lo_battery
   local flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version
 
   IFS="$SQLITE_SEPARATOR" read -r \
-    id dt event v_input v_output i_output p_output f_output v_battery c_battery temperature \
+    id dt event sample_source v_input v_output i_output p_output f_output v_battery c_battery temperature \
     nominal_v_input nominal_v_output nominal_p_output nominal_f_output nominal_v_battery \
     flag_connected flag_op_battery flag_op_warning flag_no_v_input flag_lo_battery \
     flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version <<<"$row"
@@ -195,6 +268,7 @@ LIMIT 1;"
     printf 'output.frequency.nominal: %s\n' "$(format_number "$nominal_f_output")"
     printf 'ups.temperature: %s\n' "$(format_number "$temperature")"
     printf 'ragtech.event: %s\n' "$event"
+    printf 'ragtech.sample.source: %s\n' "$sample_source"
     printf 'ragtech.sample.time: %s\n' "$dt"
     if [[ -n "$alarm" ]]; then
       printf 'ALARM [%s]\n' "$alarm"
