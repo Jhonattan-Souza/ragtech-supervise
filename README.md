@@ -46,6 +46,96 @@ $ mkdir host-db-path
 $ docker run [...] -v ./host-db-path:/data ghcr.io/kriansa/ragtech-supervise:latest
 ```
 
+## NUT bridge
+
+This repository also includes an optional NUT bridge container. It reads the same Supervise SQLite
+database and exposes a virtual NUT UPS named `ragtech` using the `dummy-ups` driver in
+`dummy-loop` mode, so the running NUT driver keeps rereading the generated state file.
+
+Run the Supervise container with `/data` mounted on the host:
+
+```
+$ mkdir -p ./ragtech-data
+$ docker run -d --name ragtech-supervise \
+    --restart unless-stopped \
+    --device /dev/ttyACM0:/dev/ttyACM0:rw \
+    -p 4470:4470 \
+    -v ./ragtech-data:/data \
+    ghcr.io/kriansa/ragtech-supervise:latest
+```
+
+Build and run the bridge:
+
+```
+$ docker build -f nut-bridge/Dockerfile -t ragtech-nut-bridge:local .
+$ docker run -d --name ragtech-nut-bridge \
+    --restart unless-stopped \
+    -p 3493:3493 \
+    -v ./ragtech-data:/data \
+    -e NUT_MONITOR_USER=monuser \
+    -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    ragtech-nut-bridge:local
+```
+
+`NUT_MONITOR_PASSWORD` is required. The bridge refuses to start without an explicit password because
+the user has `upsmon primary` rights.
+
+The `/data` mount is intentionally read-write. The bridge only reads Supervise data, but SQLite WAL
+readers may need to update lock/shared-memory state while reading the live database.
+
+If the host already has a native NUT service listening on `3493`, publish the bridge on another
+host port while testing:
+
+```
+$ docker run -d --name ragtech-nut-bridge \
+    --restart unless-stopped \
+    -p 3494:3493 \
+    -v ./ragtech-data:/data \
+    -e NUT_MONITOR_USER=monuser \
+    -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    ragtech-nut-bridge:local
+```
+
+If the Supervise container already owns the `/data` volume and you do not know its host path, you
+can reuse it directly:
+
+```
+$ docker run -d --name ragtech-nut-bridge \
+    --restart unless-stopped \
+    --volumes-from ragtech-supervise \
+    -p 3494:3493 \
+    -e NUT_MONITOR_USER=monuser \
+    -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    ragtech-nut-bridge:local
+```
+
+Validate from any machine with NUT client tools:
+
+```
+$ upsc ragtech@localhost
+```
+
+Or, when published on host port `3494`:
+
+```
+$ upsc ragtech@localhost:3494
+```
+
+The bridge maps the latest `EVENTLOG` row as follows:
+
+| NUT variable | Supervise column |
+| --- | --- |
+| `ups.status` | `flag_opBattery`, `flag_noVInput`, `flag_loBattery`, `fail_endBattery` |
+| `battery.charge` | `var_cBattery` |
+| `battery.voltage` | `var_vBattery` |
+| `input.voltage` | `var_vInput` |
+| `output.voltage` | `var_vOutput` |
+| `output.current` | `var_iOutput` |
+| `output.frequency` | `var_fOutput` |
+| `ups.load` | derived from `var_pOutput`, `var_nominalPOutput`, `var_vOutput`, and `var_iOutput` |
+| `ups.power.nominal` | `var_nominalPOutput` |
+| `ups.alarm` | emitted with `ALARM` directives from warning/fault flags |
+
 ## License
 
 Apache 2.0
