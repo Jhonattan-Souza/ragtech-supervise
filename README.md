@@ -136,6 +136,9 @@ The bridge maps the latest `EVENTLOG` row as follows:
 | `ups.power.nominal` | `var_nominalPOutput` |
 | `ups.alarm` | emitted with `ALARM` directives from warning/fault flags |
 
+When Supervise reports the UPS as disconnected or the database has no current sample, the bridge
+publishes `OFF` with an alarm and does not publish the NUT `LB` low-battery flag.
+
 ## License
 
 Apache 2.0

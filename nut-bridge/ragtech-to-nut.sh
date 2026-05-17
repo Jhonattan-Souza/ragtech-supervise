@@ -20,6 +20,10 @@ format_number() {
   awk -v value="${1:-0}" 'BEGIN { printf "%.1f", value + 0 }'
 }
 
+is_number() {
+  [[ "${1:-}" =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+}
+
 output_load_percent() {
   awk \
     -v power="${1:-0}" \
@@ -165,7 +169,7 @@ SELECT
   COALESCE(e.var_pOutput, 0),
   COALESCE(e.var_fOutput, 0),
   COALESCE(e.var_vBattery, 0),
-  COALESCE(e.var_cBattery, 0),
+  COALESCE(e.var_cBattery, ''),
   COALESCE(e.var_temperature, 0),
   COALESCE(e.var_nominalVInput, 0),
   COALESCE(e.var_nominalVOutput, 0),
@@ -214,8 +218,9 @@ LIMIT 1;"
     flag_connected flag_op_battery flag_op_warning flag_no_v_input flag_lo_battery \
     flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version <<<"$row"
 
-  local charge status alarm tmp
+  local charge status alarm tmp is_connected
   charge="$(clamp_charge "$c_battery")"
+  is_connected=0
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
     status="OFF"
@@ -223,13 +228,19 @@ LIMIT 1;"
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
     alarm=""
+    is_connected=1
   else
     status="OL"
     alarm=""
+    is_connected=1
   fi
 
-  if [[ "${flag_lo_battery:-0}" == "1" || "${fail_end_battery:-0}" == "1" || "$charge" -le "$BATTERY_CHARGE_LOW" ]]; then
-    status="$status LB"
+  if [[ "$is_connected" == "1" ]]; then
+    if [[ "${flag_lo_battery:-0}" == "1" || "${fail_end_battery:-0}" == "1" ]]; then
+      status="$status LB"
+    elif is_number "$c_battery" && [[ "$charge" -le "$BATTERY_CHARGE_LOW" ]]; then
+      status="$status LB"
+    fi
   fi
 
   if [[ "${flag_op_warning:-0}" == "1" ]]; then
