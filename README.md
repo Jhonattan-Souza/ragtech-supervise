@@ -157,6 +157,27 @@ When Supervise reports the UPS as disconnected, the bridge keeps the SQLite samp
 publishes `ups.status=ALARM` with `experimental.ragtech.connection.status=disconnected`. Standard
 NUT clients will no longer see disconnected or unavailable telemetry as `OL`.
 
+## Tests
+
+Run the fast local validation suite in a containerized Debian test environment:
+
+```
+$ tests/run-in-container.sh --unit
+```
+
+Run the hardware-free NUT bridge integration tests when Docker daemon access is available:
+
+```
+$ tests/run-in-container.sh --integration
+```
+
+Both modes run the shell syntax and ShellCheck gates first:
+
+```
+$ bash -n init.sh healthcheck.sh nut-bridge/*.sh
+$ shellcheck init.sh healthcheck.sh nut-bridge/*.sh
+```
+
 ## License
 
 Apache 2.0

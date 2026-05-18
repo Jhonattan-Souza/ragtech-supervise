@@ -71,7 +71,7 @@ ragtech-to-nut &
 exporter_pid=$!
 upsd_pid=""
 
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   trap - EXIT INT TERM
   echo "[entrypoint] stopping services"
