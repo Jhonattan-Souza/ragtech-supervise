@@ -7,12 +7,20 @@ POLL_INTERVAL="${POLL_INTERVAL:-2}"
 BATTERY_CHARGE_LOW="${BATTERY_CHARGE_LOW:-20}"
 UPS_NAME="${UPS_NAME:-ragtech}"
 REQUIRE_FRESH_SAMPLE="${REQUIRE_FRESH_SAMPLE:-1}"
+MAX_SAMPLE_AGE="${MAX_SAMPLE_AGE:-30}"
 SQLITE_SEPARATOR=$'\x1f'
 STARTUP_SAMPLE_SEEN=0
 STARTUP_SAMPLE_TOKEN=""
+CURRENT_SAMPLE_TOKEN=""
+CURRENT_SAMPLE_SEEN_AT=0
+SAMPLE_REJECT_REASON=""
 
 clamp_charge() {
-  awk -v value="${1:-0}" 'BEGIN {
+  if ! is_number "${1:-}"; then
+    return 0
+  fi
+
+  awk -v value="$1" 'BEGIN {
     if (value < 0) value = 0;
     if (value > 100) value = 100;
     printf "%.0f", value;
@@ -20,11 +28,19 @@ clamp_charge() {
 }
 
 format_number() {
-  awk -v value="${1:-0}" 'BEGIN { printf "%.1f", value + 0 }'
+  if ! is_number "${1:-}"; then
+    return 0
+  fi
+
+  awk -v value="$1" 'BEGIN { printf "%.1f", value + 0 }'
 }
 
 is_number() {
   [[ "${1:-}" =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+}
+
+is_nonnegative_integer() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]]
 }
 
 write_empty_live_values() {
@@ -47,27 +63,44 @@ write_empty_live_values() {
     output.frequency \
     output.frequency.nominal \
     ups.temperature \
-    ragtech.event \
-    ragtech.sample.source \
-    ragtech.sample.time; do
+    experimental.ragtech.event \
+    experimental.ragtech.sample.source \
+    experimental.ragtech.sample.time; do
     printf '%s: \n' "$name"
   done
 }
 
-has_fresh_start_sample() {
+sample_is_fresh() {
   local sample_token="${1:-}"
+  local now="${2:-0}"
 
-  if [[ "$REQUIRE_FRESH_SAMPLE" != "1" ]]; then
-    return 0
+  SAMPLE_REJECT_REASON=""
+
+  if [[ "$REQUIRE_FRESH_SAMPLE" == "1" ]]; then
+    if [[ "$STARTUP_SAMPLE_SEEN" != "1" ]]; then
+      STARTUP_SAMPLE_TOKEN="$sample_token"
+      STARTUP_SAMPLE_SEEN=1
+      SAMPLE_REJECT_REASON="stale-startup-sample"
+      return 1
+    fi
+
+    if [[ "$sample_token" == "$STARTUP_SAMPLE_TOKEN" ]]; then
+      SAMPLE_REJECT_REASON="stale-startup-sample"
+      return 1
+    fi
   fi
 
-  if [[ "$STARTUP_SAMPLE_SEEN" != "1" ]]; then
-    STARTUP_SAMPLE_TOKEN="$sample_token"
-    STARTUP_SAMPLE_SEEN=1
+  if [[ "$sample_token" != "$CURRENT_SAMPLE_TOKEN" ]]; then
+    CURRENT_SAMPLE_TOKEN="$sample_token"
+    CURRENT_SAMPLE_SEEN_AT="$now"
+  fi
+
+  if [[ "$MAX_SAMPLE_AGE" != "0" ]] && ((now - CURRENT_SAMPLE_SEEN_AT > MAX_SAMPLE_AGE)); then
+    SAMPLE_REJECT_REASON="stale-source-sample"
     return 1
   fi
 
-  [[ "$sample_token" != "$STARTUP_SAMPLE_TOKEN" ]]
+  return 0
 }
 
 build_sample_token() {
@@ -83,32 +116,43 @@ build_sample_token() {
 
 output_load_percent() {
   awk \
-    -v power="${1:-0}" \
-    -v nominal="${2:-0}" \
-    -v voltage="${3:-0}" \
-    -v current="${4:-0}" 'BEGIN {
-      if (nominal <= 0) {
+    -v power="${1:-}" \
+    -v nominal="${2:-}" \
+    -v voltage="${3:-}" \
+    -v current="${4:-}" \
+    -v has_power="$(is_number "${1:-}" && printf 1 || printf 0)" \
+    -v has_nominal="$(is_number "${2:-}" && printf 1 || printf 0)" \
+    -v has_voltage="$(is_number "${3:-}" && printf 1 || printf 0)" \
+    -v has_current="$(is_number "${4:-}" && printf 1 || printf 0)" 'BEGIN {
+      if (!has_nominal || nominal <= 0) {
+        if (!has_power) exit;
         value = power;
       } else {
-        power_pct = (power / nominal) * 100;
+        has_apparent = has_voltage && has_current && voltage > 0 && current > 0;
         apparent_pct = 0;
-        if (voltage > 0 && current > 0) {
+        if (has_apparent) {
           apparent_pct = ((voltage * current) / nominal) * 100;
         }
 
         # Some Supervise versions appear to store percent load in var_pOutput
         # while others may store output power. Prefer the already-percent value
         # only when it agrees with the voltage/current-derived apparent load.
-        if (power >= 0 && power <= 100 && apparent_pct > 0) {
-          diff = power - apparent_pct;
-          if (diff < 0) diff = -diff;
-          tolerance = apparent_pct * 0.35;
-          if (tolerance < 10) tolerance = 10;
-          value = diff <= tolerance ? power : power_pct;
-        } else if (power >= 0 && power <= 100 && apparent_pct == 0) {
-          value = power;
+        if (!has_power) {
+          if (!has_apparent) exit;
+          value = apparent_pct;
         } else {
-          value = power_pct;
+          power_pct = (power / nominal) * 100;
+          if (power >= 0 && power <= 100 && apparent_pct > 0) {
+            diff = power - apparent_pct;
+            if (diff < 0) diff = -diff;
+            tolerance = apparent_pct * 0.35;
+            if (tolerance < 10) tolerance = 10;
+            value = diff <= tolerance ? power : power_pct;
+          } else if (power >= 0 && power <= 100 && apparent_pct == 0) {
+            value = power;
+          } else {
+            value = power_pct;
+          }
         }
       }
 
@@ -129,14 +173,14 @@ device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
-ups.status: OL
+ups.status: ALARM
 battery.charge.low: $BATTERY_CHARGE_LOW
-ragtech.sample.valid: 0
-ragtech.connection.status: unavailable
-ragtech.bridge.reason: $reason
+experimental.ragtech.sample.valid: 0
+experimental.ragtech.connection.status: unavailable
+experimental.ragtech.bridge.reason: $reason
 EOF
     write_empty_live_values
-    printf 'ALARM\n'
+    printf 'ALARM [Ragtech telemetry unavailable: %s]\n' "$reason"
   } >"$tmp"
   chmod 0644 "$tmp"
   mv "$tmp" "$DEV_PATH"
@@ -227,19 +271,19 @@ SELECT
   COALESCE(e.dt, 0),
   COALESCE(e.event, 0),
   COALESCE(e.sample_source, ''),
-  COALESCE(e.var_vInput, 0),
-  COALESCE(e.var_vOutput, 0),
-  COALESCE(e.var_iOutput, 0),
-  COALESCE(e.var_pOutput, 0),
-  COALESCE(e.var_fOutput, 0),
-  COALESCE(e.var_vBattery, 0),
+  e.var_vInput,
+  e.var_vOutput,
+  e.var_iOutput,
+  e.var_pOutput,
+  e.var_fOutput,
+  e.var_vBattery,
   COALESCE(e.var_cBattery, ''),
-  COALESCE(e.var_temperature, 0),
-  COALESCE(e.var_nominalVInput, 0),
-  COALESCE(e.var_nominalVOutput, 0),
-  COALESCE(e.var_nominalPOutput, 0),
-  COALESCE(e.var_nominalFOutput, 0),
-  COALESCE(e.var_nominalVBattery, 0),
+  e.var_temperature,
+  e.var_nominalVInput,
+  e.var_nominalVOutput,
+  e.var_nominalPOutput,
+  e.var_nominalFOutput,
+  e.var_nominalVBattery,
   COALESCE(e.flag_connected, 0),
   COALESCE(e.flag_opBattery, 0),
   COALESCE(e.flag_opWarning, 0),
@@ -282,7 +326,7 @@ LIMIT 1;"
     flag_connected flag_op_battery flag_op_warning flag_no_v_input flag_lo_battery \
     flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version <<<"$row"
 
-  local charge status alarm tmp is_connected connection_status sample_token
+  local charge status alarm tmp is_connected connection_status sample_token now
 
   sample_token="$(build_sample_token \
     "$id" "$dt" "$event" "$sample_source" "$v_input" "$v_output" "$i_output" \
@@ -291,8 +335,9 @@ LIMIT 1;"
     "$nominal_v_battery" "$flag_connected" "$flag_op_battery" "$flag_op_warning" \
     "$flag_no_v_input" "$flag_lo_battery" "$flag_hi_p_output" "$flag_no_battery" \
     "$fail_overload" "$fail_end_battery")"
-  if ! has_fresh_start_sample "$sample_token"; then
-    write_unknown_state "stale-startup-sample"
+  now="$(date +%s)"
+  if ! sample_is_fresh "$sample_token" "$now"; then
+    write_unknown_state "$SAMPLE_REJECT_REASON"
     return
   fi
 
@@ -301,8 +346,8 @@ LIMIT 1;"
   connection_status="disconnected"
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
-    status="OL"
-    alarm=""
+    status="ALARM"
+    alarm="Ragtech Supervise reports UPS disconnected"
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
     alarm=""
@@ -362,12 +407,12 @@ LIMIT 1;"
     printf 'output.frequency: %s\n' "$(format_number "$f_output")"
     printf 'output.frequency.nominal: %s\n' "$(format_number "$nominal_f_output")"
     printf 'ups.temperature: %s\n' "$(format_number "$temperature")"
-    printf 'ragtech.event: %s\n' "$event"
-    printf 'ragtech.sample.source: %s\n' "$sample_source"
-    printf 'ragtech.sample.time: %s\n' "$dt"
-    printf 'ragtech.sample.valid: 1\n'
-    printf 'ragtech.connection.status: %s\n' "$connection_status"
-    printf 'ragtech.bridge.reason: live-sample\n'
+    printf 'experimental.ragtech.event: %s\n' "$event"
+    printf 'experimental.ragtech.sample.source: %s\n' "$sample_source"
+    printf 'experimental.ragtech.sample.time: %s\n' "$dt"
+    printf 'experimental.ragtech.sample.valid: 1\n'
+    printf 'experimental.ragtech.connection.status: %s\n' "$connection_status"
+    printf 'experimental.ragtech.bridge.reason: live-sample\n'
     if [[ -n "$alarm" ]]; then
       printf 'ALARM [%s]\n' "$alarm"
     else
@@ -378,10 +423,20 @@ LIMIT 1;"
   mv "$tmp" "$DEV_PATH"
 }
 
+validate_config() {
+  if ! is_nonnegative_integer "$MAX_SAMPLE_AGE"; then
+    echo "[ragtech-to-nut] MAX_SAMPLE_AGE must be a non-negative integer" >&2
+    exit 1
+  fi
+}
+
 if [[ "${1:-}" == "--once" ]]; then
+  validate_config
   write_state
   exit 0
 fi
+
+validate_config
 
 while true; do
   write_state

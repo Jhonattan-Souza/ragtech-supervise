@@ -18,6 +18,6 @@ upsc_value() {
 upsc_value ups.status >/dev/null
 
 if [[ "$require_valid_sample" == "1" ]]; then
-  sample_valid="$(upsc_value ragtech.sample.valid)"
+  sample_valid="$(upsc_value experimental.ragtech.sample.valid)"
   test "$sample_valid" = "1"
 fi

@@ -85,9 +85,17 @@ and does not expose it as live telemetry. This prevents an old `OB LB` row from 
 because the SQLite files were touched after the container starts. Set `REQUIRE_FRESH_SAMPLE=0` only
 if you intentionally want to expose the last persisted sample before Supervise writes a new one.
 
-The bridge healthcheck requires `ragtech.sample.valid=1` by default, so a missing or unreadable
-database fails health after Docker's startup grace. Set `HEALTHCHECK_REQUIRE_VALID_SAMPLE=0` if you
-need the container healthcheck to ignore telemetry validity and only verify the NUT service itself.
+After a sample has been accepted, the bridge also requires the SQLite source row to change within
+`MAX_SAMPLE_AGE` seconds, defaulting to `30`. When the database is unreadable, has no current row,
+or the current row is stale, the bridge reports `ups.status=ALARM` and
+`experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Set
+`MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep the same latest row for long
+periods.
+
+The bridge healthcheck requires `experimental.ragtech.sample.valid=1` by default, so a missing,
+unreadable, or stale database fails health after Docker's startup grace. Set
+`HEALTHCHECK_REQUIRE_VALID_SAMPLE=0` if you need the container healthcheck to ignore telemetry
+validity and only verify the NUT service itself.
 
 The `/data` mount is intentionally read-write. The bridge only reads Supervise data, but SQLite WAL
 readers may need to update lock/shared-memory state while reading the live database.
@@ -145,10 +153,9 @@ The bridge maps the latest Supervise sample as follows:
 | `ups.power.nominal` | `var_nominalPOutput` |
 | `ups.alarm` | emitted with `ALARM` directives from warning/fault flags |
 
-When Supervise reports the UPS as disconnected or the database has no current sample, the bridge
-publishes a non-critical `OL` status with `ragtech.connection.status`/`ragtech.sample.valid`
-metadata. It intentionally does not publish `OFF`, `OB`, `LB`, or a NUT `ALARM` for unavailable
-telemetry, because NUT clients can treat those states as power-failure inputs.
+When Supervise reports the UPS as disconnected, the bridge keeps the SQLite sample valid but
+publishes `ups.status=ALARM` with `experimental.ragtech.connection.status=disconnected`. Standard
+NUT clients will no longer see disconnected or unavailable telemetry as `OL`.
 
 ## License
 
