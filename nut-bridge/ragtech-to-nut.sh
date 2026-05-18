@@ -24,7 +24,7 @@ clamp_charge() {
     return 0
   fi
 
-  awk -v value="$1" 'BEGIN {
+  LC_ALL=C awk -v value="$1" 'BEGIN {
     if (value < 0) value = 0;
     if (value > 100) value = 100;
     printf "%.0f", value;
@@ -36,7 +36,7 @@ format_number() {
     return 0
   fi
 
-  awk -v value="$1" 'BEGIN { printf "%.1f", value + 0 }'
+  LC_ALL=C awk -v value="$1" 'BEGIN { printf "%.1f", value + 0 }'
 }
 
 is_number() {
@@ -48,7 +48,7 @@ is_nonnegative_integer() {
 }
 
 is_positive_number() {
-  is_number "${1:-}" && awk -v value="$1" 'BEGIN { exit(value > 0 ? 0 : 1) }'
+  is_number "${1:-}" && LC_ALL=C awk -v value="$1" 'BEGIN { exit(value > 0 ? 0 : 1) }'
 }
 
 write_alarm_value() {
@@ -140,7 +140,7 @@ build_sample_token() {
 }
 
 output_load_percent() {
-  awk \
+  LC_ALL=C awk \
     -v power="${1:-}" \
     -v nominal="${2:-}" \
     -v voltage="${3:-}" \

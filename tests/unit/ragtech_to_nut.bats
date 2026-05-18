@@ -343,6 +343,25 @@ SQL
   assert_nut_value "$dev" "ups.load" "70"
 }
 
+@test "numeric awk formatting is forced to C locale" {
+  create_ragtech_schema "$db"
+  insert_device "$db"
+  insert_sample "$db" EVENTLOG
+  fake_bin="$BATS_TEST_TMPDIR/bin"
+  make_fake_command "$fake_bin" awk '
+if [[ "${LC_ALL:-}" != "C" ]]; then
+  echo "awk called without LC_ALL=C" >&2
+  exit 17
+fi
+exec /usr/bin/awk "$@"
+'
+
+  PATH="$fake_bin:$PATH" run_exporter_once
+
+  assert_success
+  assert_nut_value "$dev" "ups.load" "8"
+}
+
 @test "SQLite string values are sanitized before writing dummy-ups state" {
   create_ragtech_schema "$db"
   insert_device "$db" $'ups\nINJECT: bad' 1000 $'Model\rups.status: OB LB' $'1.2.3\nALARM [bad]'
