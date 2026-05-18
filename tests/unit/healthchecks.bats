@@ -66,6 +66,11 @@ setup() {
   assert_file_contains "$log" "ragtech@127.0.0.1:3493"
 
   : >"$log"
+  run env DEV_PATH="$dev" PATH="$fake_bin:$PATH" FAKE_UPSC_LOG="$log" HEALTHCHECK_REQUIRE_VALID_SAMPLE=0 NUT_LISTEN_ADDRESS="*" bash "$REPO_ROOT/nut-bridge/healthcheck.sh"
+  assert_success
+  assert_file_contains "$log" "ragtech@127.0.0.1:3493"
+
+  : >"$log"
   run env DEV_PATH="$dev" PATH="$fake_bin:$PATH" FAKE_UPSC_LOG="$log" HEALTHCHECK_REQUIRE_VALID_SAMPLE=0 NUT_LISTEN_ADDRESS="::" bash "$REPO_ROOT/nut-bridge/healthcheck.sh"
   assert_success
   assert_file_contains "$log" "ragtech@[::1]:3493"

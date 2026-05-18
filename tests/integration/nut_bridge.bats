@@ -119,7 +119,7 @@ wait_for_upsc_contains() {
     -e POLL_INTERVAL=1 \
     "$bridge_image"
 
-  wait_for_upsc_contains ups.status OFF
+  wait_for_upsc_contains ups.status NOCOMM
   [[ "$(upsc_from_network ups.alarm)" == "Ragtech Supervise reports UPS disconnected" ]]
   [[ "$(upsc_from_network experimental.ragtech.connection.status)" == "disconnected" ]]
 
@@ -128,6 +128,6 @@ wait_for_upsc_contains() {
   [[ "$(upsc_from_network experimental.ragtech.connection.status)" == "connected" ]]
 
   wait_for_upsc_value experimental.ragtech.sample.valid 0
-  wait_for_upsc_contains ups.status OFF
+  wait_for_upsc_contains ups.status NOCOMM
   [[ "$(upsc_from_network ups.alarm)" == "Ragtech telemetry unavailable: stale-source-sample" ]]
 }

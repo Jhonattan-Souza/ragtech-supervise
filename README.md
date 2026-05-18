@@ -83,6 +83,9 @@ password, so publishing port `3493` on a LAN address exposes UPS telemetry to cl
 the port. The examples bind the host port to `127.0.0.1`; publish more broadly only when Docker
 networking or firewall rules already provide the intended access boundary.
 
+Generated NUT config values are intentionally kept unquoted. Passwords may include `=` padding, but
+avoid whitespace, quotes, backslashes, `#`, and section brackets because those are parser-sensitive.
+
 Inside the container, `upsd` listens on `NUT_LISTEN_ADDRESS`, defaulting to `0.0.0.0` so Docker
 network clients can reach it. Override `NUT_LISTEN_ADDRESS` only for runtimes where binding inside
 the container to a narrower address still preserves your intended client path.
@@ -94,7 +97,7 @@ if you intentionally want to expose the last persisted sample before Supervise w
 
 After a sample has been accepted, the bridge also requires the SQLite source row to change within
 `MAX_SAMPLE_AGE` seconds, defaulting to `30`. When the database is unreadable, has no current row,
-or the current row is stale, the generated dummy-ups file reports `ups.status=OFF`, publishes
+or the current row is stale, the generated dummy-ups file reports `ups.status=NOCOMM`, publishes
 `ups.alarm`, emits an `ALARM [...]` directive for dummy-ups versions that support it, and sets
 `experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Set
 `MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep the same latest row for long
@@ -166,7 +169,7 @@ The bridge maps the latest Supervise sample as follows:
 
 When Supervise reports the UPS as disconnected, the bridge keeps the SQLite sample valid but
 emits an alarm directive with `experimental.ragtech.connection.status=disconnected`. Standard NUT
-clients will see `ups.status=OFF` and `ups.alarm` instead of seeing disconnected or unavailable
+clients will see `ups.status=NOCOMM` and `ups.alarm` instead of seeing disconnected or unavailable
 telemetry as `OL`.
 
 ## Tests

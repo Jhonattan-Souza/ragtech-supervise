@@ -26,6 +26,37 @@ run_exporter_once() {
     bash "$REPO_ROOT/nut-bridge/ragtech-to-nut.sh" --once
 }
 
+fake_live_sqlite_row_body='attempt=0
+has_timeout=0
+while (($#)); do
+  if [[ "$1" == "-cmd" && "${2:-}" == ".timeout 2000" ]]; then
+    has_timeout=1
+  fi
+  shift
+done
+if [[ "$has_timeout" != "1" ]]; then
+  echo "missing sqlite busy timeout" >&2
+  exit 9
+fi
+if [[ -f "${FAKE_SQLITE_ATTEMPTS:-}" ]]; then
+  attempt="$(<"$FAKE_SQLITE_ATTEMPTS")"
+fi
+attempt=$((attempt + 1))
+printf "%s\n" "$attempt" >"$FAKE_SQLITE_ATTEMPTS"
+if [[ "$attempt" == "1" ]]; then
+  echo "database is locked" >&2
+  exit 5
+fi
+sep=$'\''\x1f'\''
+fields=(
+  ups-1 1000 1 EVENTLOG
+  127.2 127.0 1.0 42 60.0 13.5 88 29.2
+  127 127 500 60 12
+  1 0 0 0 0 0 0 0 0
+  "Ragtech Test UPS" "1.2.3"
+)
+(IFS="$sep"; printf "%s\n" "${fields[*]}")'
+
 seed_live_sample() {
   create_ragtech_schema "$db"
   insert_device "$db"
@@ -38,7 +69,7 @@ seed_live_sample() {
   assert_success
   assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
-  assert_nut_value "$dev" "ups.status" "OFF"
+  assert_nut_value "$dev" "ups.status" "NOCOMM"
   assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: database-unreadable"
   assert_file_contains "$dev" "ALARM [Ragtech telemetry unavailable: database-unreadable]"
 }
@@ -105,6 +136,30 @@ seed_live_sample() {
   assert_output_contains "BATTERY_CHARGE_LOW must be an integer from 0 to 100"
 }
 
+@test "invalid REQUIRE_FRESH_SAMPLE exits with a clear error" {
+  seed_live_sample
+
+  REQUIRE_FRESH_SAMPLE=maybe run_exporter_once
+
+  assert_failure
+  assert_output_contains "REQUIRE_FRESH_SAMPLE must be 0 or 1"
+}
+
+@test "SQLite read uses a busy timeout and retries a transient failure" {
+  fake_bin="$BATS_TEST_TMPDIR/bin"
+  attempts="$BATS_TEST_TMPDIR/sqlite-attempts"
+  mkdir -p "$fake_bin"
+  : >"$db"
+  make_fake_command "$fake_bin" sqlite3 "$fake_live_sqlite_row_body"
+
+  PATH="$fake_bin:$PATH" FAKE_SQLITE_ATTEMPTS="$attempts" run_exporter_once
+
+  assert_success
+  [[ "$(<"$attempts")" == "2" ]]
+  assert_nut_value "$dev" "experimental.ragtech.sample.valid" "1"
+  assert_nut_value "$dev" "ups.status" "OL"
+}
+
 @test "MAX_SAMPLE_AGE=0 allows the current row to remain valid" {
   seed_live_sample
 
@@ -143,7 +198,7 @@ seed_live_sample() {
 
   SAMPLE_DT=1005 SAMPLE_EVENT=6 SAMPLE_CONNECTED=0 insert_sample "$db" EVENTLOG
   run_exporter_once
-  assert_nut_value "$dev" "ups.status" "OFF"
+  assert_nut_value "$dev" "ups.status" "NOCOMM"
   assert_nut_value "$dev" "ups.alarm" "Ragtech Supervise reports UPS disconnected"
   assert_nut_value "$dev" "experimental.ragtech.connection.status" "disconnected"
   assert_file_contains "$dev" "ALARM [Ragtech Supervise reports UPS disconnected]"

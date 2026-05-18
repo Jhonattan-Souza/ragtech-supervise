@@ -22,6 +22,15 @@ validate_section_name() {
   fi
 }
 
+validate_ups_name() {
+  validate_section_name "UPS_NAME" "$UPS_NAME"
+
+  if [[ "${UPS_NAME,,}" == "default" ]]; then
+    echo "[entrypoint] UPS_NAME must not be the reserved NUT name default" >&2
+    exit 1
+  fi
+}
+
 validate_no_newline() {
   local name="$1"
   local value="$2"
@@ -36,7 +45,12 @@ validate_config_token() {
   local name="$1"
   local value="$2"
 
-  if [[ "$value" =~ [[:space:]] || "$value" == *"#"* || "$value" == *"["* || "$value" == *"]"* ]]; then
+  if [[ "$value" =~ [[:space:]] \
+    || "$value" == *"#"* \
+    || "$value" == *"["* \
+    || "$value" == *"]"* \
+    || "$value" == *'"'* \
+    || "$value" == *\\* ]]; then
     echo "[entrypoint] $name must not contain whitespace or NUT config metacharacters" >&2
     exit 1
   fi
@@ -46,13 +60,19 @@ validate_absolute_config_path() {
   local name="$1"
   local value="$2"
 
-  if [[ "$value" != /* || "$value" =~ [[:space:]] || "$value" == *"#"* || "$value" == *"["* || "$value" == *"]"* ]]; then
+  if [[ "$value" != /* \
+    || "$value" =~ [[:space:]] \
+    || "$value" == *"#"* \
+    || "$value" == *"["* \
+    || "$value" == *"]"* \
+    || "$value" == *'"'* \
+    || "$value" == *\\* ]]; then
     echo "[entrypoint] $name must be an absolute path without whitespace or NUT config metacharacters" >&2
     exit 1
   fi
 }
 
-validate_section_name "UPS_NAME" "$UPS_NAME"
+validate_ups_name
 validate_section_name "NUT_MONITOR_USER" "$NUT_MONITOR_USER"
 validate_no_newline "NUT_MONITOR_PASSWORD" "$NUT_MONITOR_PASSWORD"
 validate_config_token "NUT_MONITOR_PASSWORD" "$NUT_MONITOR_PASSWORD"

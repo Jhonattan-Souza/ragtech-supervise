@@ -24,7 +24,7 @@ test "$age" -le "$max_age"
 
 healthcheck_address="$listen_address"
 case "$healthcheck_address" in
-  0.0.0.0)
+  0.0.0.0|\*)
     healthcheck_address="127.0.0.1"
     ;;
   ::)

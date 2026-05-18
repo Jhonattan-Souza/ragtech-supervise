@@ -8,6 +8,7 @@ BATTERY_CHARGE_LOW="${BATTERY_CHARGE_LOW:-20}"
 UPS_NAME="${UPS_NAME:-ragtech}"
 REQUIRE_FRESH_SAMPLE="${REQUIRE_FRESH_SAMPLE:-1}"
 MAX_SAMPLE_AGE="${MAX_SAMPLE_AGE:-30}"
+SQLITE_BUSY_TIMEOUT_MS=2000
 SQLITE_SEPARATOR=$'\x1f'
 STARTUP_SAMPLE_SEEN=0
 STARTUP_SAMPLE_TOKEN=""
@@ -189,7 +190,7 @@ device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
-ups.status: OFF
+ups.status: NOCOMM
 battery.charge.low: $BATTERY_CHARGE_LOW
 experimental.ragtech.sample.valid: 0
 experimental.ragtech.connection.status: unavailable
@@ -316,14 +317,27 @@ LEFT JOIN DEVICELIST d ON d.id = e.id
 ORDER BY e.dt DESC, e.event DESC, e.sample_source ASC
 LIMIT 1;"
 
-  local query_error
+  local query_error attempt
   query_error="$(mktemp)"
-  if ! row="$(sqlite3 -batch -noheader -separator "$SQLITE_SEPARATOR" "$DB_PATH" "$query" 2>"$query_error")"; then
-    echo "[ragtech-to-nut] failed to read $DB_PATH: $(tr '\n' ' ' <"$query_error")" >&2
-    rm -f "$query_error"
-    write_unknown_state "query-failed"
-    return
-  fi
+  for attempt in 1 2; do
+    : >"$query_error"
+    if row="$(sqlite3 \
+      -batch \
+      -noheader \
+      -separator "$SQLITE_SEPARATOR" \
+      -cmd ".timeout $SQLITE_BUSY_TIMEOUT_MS" \
+      "$DB_PATH" \
+      "$query" 2>"$query_error")"; then
+      break
+    fi
+
+    if [[ "$attempt" == "2" ]]; then
+      echo "[ragtech-to-nut] failed to read $DB_PATH: $(tr '\n' ' ' <"$query_error")" >&2
+      rm -f "$query_error"
+      write_unknown_state "query-failed"
+      return
+    fi
+  done
   rm -f "$query_error"
 
   if [[ -z "$row" ]]; then
@@ -362,7 +376,7 @@ LIMIT 1;"
   connection_status="disconnected"
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
-    status="OFF"
+    status="NOCOMM"
     alarm="Ragtech Supervise reports UPS disconnected"
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
@@ -448,6 +462,11 @@ validate_config() {
 
   if ! is_nonnegative_integer "$BATTERY_CHARGE_LOW" || ((BATTERY_CHARGE_LOW > 100)); then
     echo "[ragtech-to-nut] BATTERY_CHARGE_LOW must be an integer from 0 to 100" >&2
+    exit 1
+  fi
+
+  if [[ ! "$REQUIRE_FRESH_SAMPLE" =~ ^[01]$ ]]; then
+    echo "[ragtech-to-nut] REQUIRE_FRESH_SAMPLE must be 0 or 1" >&2
     exit 1
   fi
 }

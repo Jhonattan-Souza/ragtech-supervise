@@ -48,6 +48,10 @@ run_entrypoint() {
   assert_failure
   assert_output_contains "UPS_NAME must contain only letters"
 
+  NUT_MONITOR_PASSWORD=secret UPS_NAME=default run_entrypoint
+  assert_failure
+  assert_output_contains "UPS_NAME must not be the reserved NUT name default"
+
   NUT_MONITOR_PASSWORD=secret UPS_NAME=ragtech NUT_MONITOR_USER="bad/user" run_entrypoint
   assert_failure
   assert_output_contains "NUT_MONITOR_USER must contain only letters"
@@ -73,6 +77,14 @@ run_entrypoint() {
   assert_output_contains "NUT_MONITOR_PASSWORD must not contain whitespace or NUT config metacharacters"
 
   NUT_MONITOR_PASSWORD='hash#secret' run_entrypoint
+  assert_failure
+  assert_output_contains "NUT_MONITOR_PASSWORD must not contain whitespace or NUT config metacharacters"
+
+  NUT_MONITOR_PASSWORD='quoted"secret' run_entrypoint
+  assert_failure
+  assert_output_contains "NUT_MONITOR_PASSWORD must not contain whitespace or NUT config metacharacters"
+
+  NUT_MONITOR_PASSWORD='slash\secret' run_entrypoint
   assert_failure
   assert_output_contains "NUT_MONITOR_PASSWORD must not contain whitespace or NUT config metacharacters"
 
