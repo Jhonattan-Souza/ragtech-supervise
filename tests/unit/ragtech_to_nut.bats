@@ -71,9 +71,9 @@ seed_live_sample() {
   assert_success
   assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
+  assert_nut_value "$dev" "ups.status" ""
   assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: database-unreadable"
   assert_file_contains "$dev" "ALARM [Ragtech telemetry unavailable: database-unreadable]"
-  refute_file_contains "$dev" "ups.status:"
 }
 
 @test "missing SQLite tables reports query-failed" {
@@ -239,7 +239,7 @@ seed_live_sample() {
   assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: ups-disconnected"
   assert_nut_value "$dev" "experimental.ragtech.connection.status" "disconnected"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "ups-disconnected"
-  refute_file_contains "$dev" "ups.status:"
+  assert_nut_value "$dev" "ups.status" ""
 }
 
 @test "long-running exporter exits after live telemetry becomes invalid" {
@@ -297,6 +297,34 @@ seed_live_sample() {
   assert_nut_value "$dev" "battery.charge" "77"
 }
 
+@test "latest-sample query shape can use representative dt indexes" {
+  create_ragtech_schema "$db"
+
+  plan="$(sqlite3 "$db" <<'SQL'
+EXPLAIN QUERY PLAN
+SELECT * FROM (
+  SELECT 'EVENTLOG' AS sample_source, id, dt, event
+  FROM EVENTLOG
+  WHERE id = 'ups-1'
+  ORDER BY dt DESC, event DESC
+  LIMIT 1
+)
+UNION ALL
+SELECT * FROM (
+  SELECT 'HISTLOGHOUR' AS sample_source, id, dt, event
+  FROM HISTLOGHOUR
+  WHERE id = 'ups-1'
+  ORDER BY dt DESC, event DESC
+  LIMIT 1
+);
+SQL
+)"
+
+  [[ "$plan" == *"SEARCH EVENTLOG USING COVERING INDEX sqlite_autoindex_EVENTLOG_1"* ]]
+  [[ "$plan" == *"SEARCH HISTLOGHOUR USING COVERING INDEX sqlite_autoindex_HISTLOGHOUR_1"* ]]
+  [[ "$plan" != *"USE TEMP B-TREE"* ]]
+}
+
 @test "numeric formatting clamps charge and blanks invalid numbers" {
   create_ragtech_schema "$db"
   insert_device "$db"
@@ -318,7 +346,7 @@ seed_live_sample() {
 @test "SQLite string values are sanitized before writing dummy-ups state" {
   create_ragtech_schema "$db"
   insert_device "$db" $'ups\nINJECT: bad' 1000 $'Model\rups.status: OB LB' $'1.2.3\nALARM [bad]'
-  SAMPLE_ID=$'ups\nINJECT: bad' insert_sample "$db" EVENTLOG
+  SAMPLE_ID=$'ups\nINJECT: bad' SAMPLE_DT=$'1000\nups.status: OB' SAMPLE_EVENT=$'8\nALARM [bad]' insert_sample "$db" EVENTLOG
 
   run_exporter_once
 
@@ -326,7 +354,11 @@ seed_live_sample() {
   assert_nut_value "$dev" "device.serial" "upsINJECT: bad"
   assert_nut_value "$dev" "device.model" "Modelups.status: OB LB"
   assert_nut_value "$dev" "ups.firmware" "1.2.3ALARM [bad]"
+  assert_nut_value "$dev" "experimental.ragtech.sample.time" "1000"
+  assert_nut_value "$dev" "experimental.ragtech.event" "8"
   ! grep -Fxq "ups.status: OB LB" "$dev"
+  ! grep -Fxq "ups.status: OB" "$dev"
+  ! grep -Fxq "ALARM [bad]" "$dev"
 }
 
 @test "load derivation prefers apparent output when percent-like power disagrees" {

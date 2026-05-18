@@ -200,6 +200,7 @@ device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
+ups.status:
 battery.charge.low: $BATTERY_CHARGE_LOW
 experimental.ragtech.sample.valid: 0
 experimental.ragtech.connection.status: $connection_status
@@ -307,8 +308,8 @@ samples AS (
 )
 SELECT
   replace(replace(replace(replace(COALESCE(e.id, ''), char(31), ''), char(13), ''), char(10), ''), char(9), ' '),
-  COALESCE(e.dt, 0),
-  COALESCE(e.event, 0),
+  CAST(COALESCE(e.dt, 0) AS INTEGER),
+  CAST(COALESCE(e.event, 0) AS INTEGER),
   COALESCE(e.sample_source, ''),
   e.var_vInput,
   e.var_vOutput,

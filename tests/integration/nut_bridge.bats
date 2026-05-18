@@ -80,6 +80,27 @@ wait_for_container_exit() {
   return 1
 }
 
+write_invalid_dummy_state() {
+  docker exec "$bridge_name" sh -c '
+tmp="$(mktemp /run/nut/ragtech.dev.XXXXXX)"
+{
+  printf "%s\n" "device.mfr: Ragtech"
+  printf "%s\n" "device.model: Supervise"
+  printf "%s\n" "device.type: ups"
+  printf "%s\n" "ups.mfr: Ragtech"
+  printf "%s\n" "ups.model: Supervise"
+  printf "%s\n" "ups.status:"
+  printf "%s\n" "experimental.ragtech.sample.valid: 0"
+  printf "%s\n" "experimental.ragtech.connection.status: unavailable"
+  printf "%s\n" "experimental.ragtech.bridge.reason: integration-invalid"
+  printf "%s\n" "ups.alarm: Ragtech telemetry unavailable: integration-invalid"
+  printf "%s\n" "ALARM [Ragtech telemetry unavailable: integration-invalid]"
+} >"$tmp"
+chmod 0644 "$tmp"
+mv "$tmp" /run/nut/ragtech.dev
+'
+}
+
 @test "NUT bridge container exposes generated SQLite telemetry without UPS hardware" {
   create_ragtech_schema "$db"
   insert_device "$db" ups-integration 1000 "Ragtech Integration UPS" "9.9"
@@ -111,6 +132,31 @@ wait_for_container_exit() {
 
   docker inspect "$bridge_name" >&2
   return 1
+}
+
+@test "NUT bridge clears stale ups.status when an invalid dummy state is served" {
+  create_ragtech_schema "$db"
+  insert_device "$db" ups-integration 1000 "Ragtech Integration UPS" "9.9"
+  SAMPLE_ID=ups-integration SAMPLE_DT=1000 SAMPLE_EVENT=7 insert_sample "$db" EVENTLOG
+
+  docker build -f "$REPO_ROOT/nut-bridge/Dockerfile" -t "$bridge_image" "$REPO_ROOT"
+  docker network create "$network"
+  docker run -d \
+    --name "$bridge_name" \
+    --network "$network" \
+    -v "$data_dir:/data" \
+    -e NUT_MONITOR_PASSWORD=integration-secret \
+    -e REQUIRE_FRESH_SAMPLE=0 \
+    -e MAX_SAMPLE_AGE=0 \
+    -e POLL_INTERVAL=60 \
+    "$bridge_image"
+
+  wait_for_upsc_value ups.status OL
+  write_invalid_dummy_state
+
+  wait_for_upsc_value ups.alarm "Ragtech telemetry unavailable: integration-invalid"
+  wait_for_upsc_value experimental.ragtech.sample.valid 0
+  wait_for_upsc_value ups.status ""
 }
 
 @test "NUT bridge container fails fast when password is missing" {

@@ -46,10 +46,38 @@ CREATE TABLE EVENTLOG (
   flag_hiPOutput INTEGER,
   flag_noBattery INTEGER,
   fail_overload INTEGER,
-  fail_endBattery INTEGER
+  fail_endBattery INTEGER,
+  PRIMARY KEY (id, dt, event)
 );
 
-CREATE TABLE HISTLOGHOUR AS SELECT * FROM EVENTLOG WHERE 0;
+CREATE TABLE HISTLOGHOUR (
+  id TEXT,
+  dt INTEGER,
+  event INTEGER,
+  var_vInput,
+  var_vOutput,
+  var_iOutput,
+  var_pOutput,
+  var_fOutput,
+  var_vBattery,
+  var_cBattery,
+  var_temperature,
+  var_nominalVInput,
+  var_nominalVOutput,
+  var_nominalPOutput,
+  var_nominalFOutput,
+  var_nominalVBattery,
+  flag_connected INTEGER,
+  flag_opBattery INTEGER,
+  flag_opWarning INTEGER,
+  flag_noVInput INTEGER,
+  flag_loBattery INTEGER,
+  flag_hiPOutput INTEGER,
+  flag_noBattery INTEGER,
+  fail_overload INTEGER,
+  fail_endBattery INTEGER,
+  PRIMARY KEY (id, dt, event)
+);
 SQL
 }
 
