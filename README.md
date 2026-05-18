@@ -70,7 +70,7 @@ Build and run the bridge:
 $ docker build -f nut-bridge/Dockerfile -t ragtech-nut-bridge:local .
 $ docker run -d --name ragtech-nut-bridge \
     --restart unless-stopped \
-    -p 3493:3493 \
+    -p 127.0.0.1:3493:3493 \
     -v ./ragtech-data:/data \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
@@ -78,7 +78,14 @@ $ docker run -d --name ragtech-nut-bridge \
 ```
 
 `NUT_MONITOR_PASSWORD` is required. The bridge refuses to start without an explicit password because
-the user has `upsmon primary` rights.
+the user has `upsmon primary` rights. NUT variable reads with `upsc` are not authenticated by that
+password, so publishing port `3493` on a LAN address exposes UPS telemetry to clients that can reach
+the port. The examples bind the host port to `127.0.0.1`; publish more broadly only when Docker
+networking or firewall rules already provide the intended access boundary.
+
+Inside the container, `upsd` listens on `NUT_LISTEN_ADDRESS`, defaulting to `0.0.0.0` so Docker
+network clients can reach it. Override `NUT_LISTEN_ADDRESS` only for runtimes where binding inside
+the container to a narrower address still preserves your intended client path.
 
 By default, the bridge treats the first SQLite sample observed after process startup as a baseline
 and does not expose it as live telemetry. This prevents an old `OB LB` row from being replayed just
@@ -87,10 +94,14 @@ if you intentionally want to expose the last persisted sample before Supervise w
 
 After a sample has been accepted, the bridge also requires the SQLite source row to change within
 `MAX_SAMPLE_AGE` seconds, defaulting to `30`. When the database is unreadable, has no current row,
-or the current row is stale, the bridge reports `ups.status=ALARM` and
+or the current row is stale, the generated dummy-ups file reports `ups.status=OFF`, publishes
+`ups.alarm`, emits an `ALARM [...]` directive for dummy-ups versions that support it, and sets
 `experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Set
 `MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep the same latest row for long
 periods.
+
+Current Debian/NUT `dummy-ups` does not expose `ALARM [...]` as `ups.alarm`, so the bridge writes
+`ups.alarm` directly and keeps the directive for newer implementations.
 
 The bridge healthcheck requires `experimental.ragtech.sample.valid=1` by default, so a missing,
 unreadable, or stale database fails health after Docker's startup grace. Set
@@ -106,7 +117,7 @@ host port while testing:
 ```
 $ docker run -d --name ragtech-nut-bridge \
     --restart unless-stopped \
-    -p 3494:3493 \
+    -p 127.0.0.1:3494:3493 \
     -v ./ragtech-data:/data \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
@@ -120,7 +131,7 @@ can reuse it directly:
 $ docker run -d --name ragtech-nut-bridge \
     --restart unless-stopped \
     --volumes-from ragtech-supervise \
-    -p 3494:3493 \
+    -p 127.0.0.1:3494:3493 \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
     ragtech-nut-bridge:local
@@ -151,11 +162,12 @@ The bridge maps the latest Supervise sample as follows:
 | `output.frequency` | `var_fOutput` |
 | `ups.load` | derived from `var_pOutput`, `var_nominalPOutput`, `var_vOutput`, and `var_iOutput` |
 | `ups.power.nominal` | `var_nominalPOutput` |
-| `ups.alarm` | emitted with `ALARM` directives from warning/fault flags |
+| `ups.alarm` | warning/fault flags and unavailable telemetry reasons |
 
 When Supervise reports the UPS as disconnected, the bridge keeps the SQLite sample valid but
-publishes `ups.status=ALARM` with `experimental.ragtech.connection.status=disconnected`. Standard
-NUT clients will no longer see disconnected or unavailable telemetry as `OL`.
+emits an alarm directive with `experimental.ragtech.connection.status=disconnected`. Standard NUT
+clients will see `ups.status=OFF` and `ups.alarm` instead of seeing disconnected or unavailable
+telemetry as `OL`.
 
 ## Tests
 

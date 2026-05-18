@@ -43,6 +43,22 @@ is_nonnegative_integer() {
   [[ "${1:-}" =~ ^[0-9]+$ ]]
 }
 
+is_positive_number() {
+  is_number "${1:-}" && awk -v value="$1" 'BEGIN { exit(value > 0 ? 0 : 1) }'
+}
+
+write_alarm_value() {
+  local message="${1:-}"
+
+  if [[ -n "$message" ]]; then
+    printf 'ups.alarm: %s\n' "$message"
+    printf 'ALARM [%s]\n' "$message"
+  else
+    printf 'ups.alarm: \n'
+    printf 'ALARM\n'
+  fi
+}
+
 write_empty_live_values() {
   local name
 
@@ -173,14 +189,14 @@ device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
-ups.status: ALARM
+ups.status: OFF
 battery.charge.low: $BATTERY_CHARGE_LOW
 experimental.ragtech.sample.valid: 0
 experimental.ragtech.connection.status: unavailable
 experimental.ragtech.bridge.reason: $reason
 EOF
     write_empty_live_values
-    printf 'ALARM [Ragtech telemetry unavailable: %s]\n' "$reason"
+    write_alarm_value "Ragtech telemetry unavailable: $reason"
   } >"$tmp"
   chmod 0644 "$tmp"
   mv "$tmp" "$DEV_PATH"
@@ -346,7 +362,7 @@ LIMIT 1;"
   connection_status="disconnected"
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
-    status="ALARM"
+    status="OFF"
     alarm="Ragtech Supervise reports UPS disconnected"
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
@@ -413,11 +429,7 @@ LIMIT 1;"
     printf 'experimental.ragtech.sample.valid: 1\n'
     printf 'experimental.ragtech.connection.status: %s\n' "$connection_status"
     printf 'experimental.ragtech.bridge.reason: live-sample\n'
-    if [[ -n "$alarm" ]]; then
-      printf 'ALARM [%s]\n' "$alarm"
-    else
-      printf 'ALARM\n'
-    fi
+    write_alarm_value "$alarm"
   } >"$tmp"
   chmod 0644 "$tmp"
   mv "$tmp" "$DEV_PATH"
@@ -426,6 +438,16 @@ LIMIT 1;"
 validate_config() {
   if ! is_nonnegative_integer "$MAX_SAMPLE_AGE"; then
     echo "[ragtech-to-nut] MAX_SAMPLE_AGE must be a non-negative integer" >&2
+    exit 1
+  fi
+
+  if ! is_positive_number "$POLL_INTERVAL"; then
+    echo "[ragtech-to-nut] POLL_INTERVAL must be a positive number" >&2
+    exit 1
+  fi
+
+  if ! is_nonnegative_integer "$BATTERY_CHARGE_LOW" || ((BATTERY_CHARGE_LOW > 100)); then
+    echo "[ragtech-to-nut] BATTERY_CHARGE_LOW must be an integer from 0 to 100" >&2
     exit 1
   fi
 }

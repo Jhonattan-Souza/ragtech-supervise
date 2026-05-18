@@ -38,7 +38,9 @@ seed_live_sample() {
   assert_success
   assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
-  assert_nut_value "$dev" "ups.status" "ALARM"
+  assert_nut_value "$dev" "ups.status" "OFF"
+  assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: database-unreadable"
+  assert_file_contains "$dev" "ALARM [Ragtech telemetry unavailable: database-unreadable]"
 }
 
 @test "missing SQLite tables reports query-failed" {
@@ -87,6 +89,22 @@ seed_live_sample() {
   assert_output_contains "MAX_SAMPLE_AGE must be a non-negative integer"
 }
 
+@test "invalid POLL_INTERVAL and BATTERY_CHARGE_LOW exit with clear errors" {
+  seed_live_sample
+
+  POLL_INTERVAL=0 run_exporter_once
+  assert_failure
+  assert_output_contains "POLL_INTERVAL must be a positive number"
+
+  BATTERY_CHARGE_LOW=abc run_exporter_once
+  assert_failure
+  assert_output_contains "BATTERY_CHARGE_LOW must be an integer from 0 to 100"
+
+  BATTERY_CHARGE_LOW=101 run_exporter_once
+  assert_failure
+  assert_output_contains "BATTERY_CHARGE_LOW must be an integer from 0 to 100"
+}
+
 @test "MAX_SAMPLE_AGE=0 allows the current row to remain valid" {
   seed_live_sample
 
@@ -125,9 +143,10 @@ seed_live_sample() {
 
   SAMPLE_DT=1005 SAMPLE_EVENT=6 SAMPLE_CONNECTED=0 insert_sample "$db" EVENTLOG
   run_exporter_once
-  assert_nut_value "$dev" "ups.status" "ALARM"
+  assert_nut_value "$dev" "ups.status" "OFF"
+  assert_nut_value "$dev" "ups.alarm" "Ragtech Supervise reports UPS disconnected"
   assert_nut_value "$dev" "experimental.ragtech.connection.status" "disconnected"
-  assert_file_contains "$dev" "Ragtech Supervise reports UPS disconnected"
+  assert_file_contains "$dev" "ALARM [Ragtech Supervise reports UPS disconnected]"
 }
 
 @test "warning and fault alarms are combined in alarm text" {
