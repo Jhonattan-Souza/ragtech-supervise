@@ -10,11 +10,14 @@ REQUIRE_FRESH_SAMPLE="${REQUIRE_FRESH_SAMPLE:-1}"
 MAX_SAMPLE_AGE="${MAX_SAMPLE_AGE:-30}"
 SQLITE_BUSY_TIMEOUT_MS=2000
 SQLITE_SEPARATOR=$'\x1f'
+EXIT_ON_INVALID_AFTER_LIVE="${EXIT_ON_INVALID_AFTER_LIVE:-0}"
 STARTUP_SAMPLE_SEEN=0
 STARTUP_SAMPLE_TOKEN=""
 CURRENT_SAMPLE_TOKEN=""
 CURRENT_SAMPLE_SEEN_AT=0
 SAMPLE_REJECT_REASON=""
+LIVE_SAMPLE_SEEN="${RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN:-0}"
+LAST_SAMPLE_VALID=0
 
 clamp_charge() {
   if ! is_number "${1:-}"; then
@@ -60,6 +63,10 @@ write_alarm_value() {
   fi
 }
 
+sanitize_text_value() {
+  printf '%s' "${1:-}" | tr -cd ' -~'
+}
+
 write_empty_live_values() {
   local name
 
@@ -70,6 +77,7 @@ write_empty_live_values() {
     ups.load \
     ups.power.nominal \
     battery.charge \
+    battery.charger.status \
     battery.voltage \
     battery.voltage.nominal \
     input.voltage \
@@ -181,7 +189,9 @@ output_load_percent() {
 
 write_unknown_state() {
   local reason="${1:-no-current-sample}"
+  local connection_status="${2:-unavailable}"
   local tmp
+  LAST_SAMPLE_VALID=0
   tmp="$(mktemp "${DEV_PATH}.XXXXXX")"
   {
     cat <<EOF
@@ -190,10 +200,9 @@ device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
-ups.status: NOCOMM
 battery.charge.low: $BATTERY_CHARGE_LOW
 experimental.ragtech.sample.valid: 0
-experimental.ragtech.connection.status: unavailable
+experimental.ragtech.connection.status: $connection_status
 experimental.ragtech.bridge.reason: $reason
 EOF
     write_empty_live_values
@@ -203,9 +212,22 @@ EOF
   mv "$tmp" "$DEV_PATH"
 }
 
+write_invalid_state() {
+  local reason="$1"
+  local connection_status="${2:-unavailable}"
+
+  write_unknown_state "$reason" "$connection_status"
+
+  if [[ "$EXIT_ON_INVALID_AFTER_LIVE" == "1" && "$LIVE_SAMPLE_SEEN" == "1" ]]; then
+    return 75
+  fi
+
+  return 0
+}
+
 write_state() {
   if [[ ! -r "$DB_PATH" ]]; then
-    write_unknown_state "database-unreadable"
+    write_invalid_state "database-unreadable"
     return
   fi
 
@@ -284,7 +306,7 @@ samples AS (
   )
 )
 SELECT
-  COALESCE(e.id, ''),
+  replace(replace(replace(replace(COALESCE(e.id, ''), char(31), ''), char(13), ''), char(10), ''), char(9), ' '),
   COALESCE(e.dt, 0),
   COALESCE(e.event, 0),
   COALESCE(e.sample_source, ''),
@@ -310,8 +332,8 @@ SELECT
   COALESCE(e.flag_noBattery, 0),
   COALESCE(e.fail_overload, 0),
   COALESCE(e.fail_endBattery, 0),
-  COALESCE(NULLIF(d.userProd, ''), 'Supervise') AS model,
-  COALESCE(NULLIF(d.version, ''), '') AS version
+  replace(replace(replace(replace(COALESCE(NULLIF(d.userProd, ''), 'Supervise'), char(31), ''), char(13), ''), char(10), ''), char(9), ' ') AS model,
+  replace(replace(replace(replace(COALESCE(NULLIF(d.version, ''), ''), char(31), ''), char(13), ''), char(10), ''), char(9), ' ') AS version
 FROM samples e
 LEFT JOIN DEVICELIST d ON d.id = e.id
 ORDER BY e.dt DESC, e.event DESC, e.sample_source ASC
@@ -334,14 +356,14 @@ LIMIT 1;"
     if [[ "$attempt" == "2" ]]; then
       echo "[ragtech-to-nut] failed to read $DB_PATH: $(tr '\n' ' ' <"$query_error")" >&2
       rm -f "$query_error"
-      write_unknown_state "query-failed"
+      write_invalid_state "query-failed"
       return
     fi
   done
   rm -f "$query_error"
 
   if [[ -z "$row" ]]; then
-    write_unknown_state "no-current-sample"
+    write_invalid_state "no-current-sample"
     return
   fi
 
@@ -357,6 +379,7 @@ LIMIT 1;"
     flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version <<<"$row"
 
   local charge status alarm tmp is_connected connection_status sample_token now
+  local safe_id safe_model safe_version battery_charger_status
 
   sample_token="$(build_sample_token \
     "$id" "$dt" "$event" "$sample_source" "$v_input" "$v_output" "$i_output" \
@@ -367,7 +390,7 @@ LIMIT 1;"
     "$fail_overload" "$fail_end_battery")"
   now="$(date +%s)"
   if ! sample_is_fresh "$sample_token" "$now"; then
-    write_unknown_state "$SAMPLE_REJECT_REASON"
+    write_invalid_state "$SAMPLE_REJECT_REASON"
     return
   fi
 
@@ -376,16 +399,18 @@ LIMIT 1;"
   connection_status="disconnected"
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
-    status="NOCOMM"
-    alarm="Ragtech Supervise reports UPS disconnected"
+    write_invalid_state "ups-disconnected" "disconnected"
+    return
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
     alarm=""
+    battery_charger_status="discharging"
     is_connected=1
     connection_status="connected"
   else
     status="OL"
     alarm=""
+    battery_charger_status=""
     is_connected=1
     connection_status="connected"
   fi
@@ -412,21 +437,26 @@ LIMIT 1;"
     fi
   fi
 
+  safe_id="$(sanitize_text_value "$id")"
+  safe_model="$(sanitize_text_value "${model:-Supervise}")"
+  safe_version="$(sanitize_text_value "${version:-unknown}")"
+
   tmp="$(mktemp "${DEV_PATH}.XXXXXX")"
   {
     printf 'device.mfr: Ragtech\n'
-    printf 'device.model: %s\n' "${model:-Supervise}"
-    printf 'device.serial: %s\n' "$id"
+    printf 'device.model: %s\n' "$safe_model"
+    printf 'device.serial: %s\n' "$safe_id"
     printf 'device.type: ups\n'
     printf 'ups.mfr: Ragtech\n'
-    printf 'ups.model: %s\n' "${model:-Supervise}"
-    printf 'ups.serial: %s\n' "$id"
-    printf 'ups.firmware: %s\n' "${version:-unknown}"
+    printf 'ups.model: %s\n' "$safe_model"
+    printf 'ups.serial: %s\n' "$safe_id"
+    printf 'ups.firmware: %s\n' "$safe_version"
     printf 'ups.status: %s\n' "$status"
     printf 'ups.load: %s\n' "$(output_load_percent "$p_output" "$nominal_p_output" "$v_output" "$i_output")"
     printf 'ups.power.nominal: %s\n' "$(format_number "$nominal_p_output")"
     printf 'battery.charge: %s\n' "$charge"
     printf 'battery.charge.low: %s\n' "$BATTERY_CHARGE_LOW"
+    printf 'battery.charger.status: %s\n' "$battery_charger_status"
     printf 'battery.voltage: %s\n' "$(format_number "$v_battery")"
     printf 'battery.voltage.nominal: %s\n' "$(format_number "$nominal_v_battery")"
     printf 'input.voltage: %s\n' "$(format_number "$v_input")"
@@ -447,6 +477,8 @@ LIMIT 1;"
   } >"$tmp"
   chmod 0644 "$tmp"
   mv "$tmp" "$DEV_PATH"
+  LIVE_SAMPLE_SEEN=1
+  LAST_SAMPLE_VALID=1
 }
 
 validate_config() {
@@ -469,12 +501,36 @@ validate_config() {
     echo "[ragtech-to-nut] REQUIRE_FRESH_SAMPLE must be 0 or 1" >&2
     exit 1
   fi
+
+  if [[ ! "$EXIT_ON_INVALID_AFTER_LIVE" =~ ^[01]$ ]]; then
+    echo "[ragtech-to-nut] EXIT_ON_INVALID_AFTER_LIVE must be 0 or 1" >&2
+    exit 1
+  fi
+
+  if [[ ! "$LIVE_SAMPLE_SEEN" =~ ^[01]$ ]]; then
+    echo "[ragtech-to-nut] RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN must be 0 or 1" >&2
+    exit 1
+  fi
 }
 
 if [[ "${1:-}" == "--once" ]]; then
   validate_config
-  write_state
-  exit 0
+  if write_state; then
+    exit 0
+  else
+    exit "$?"
+  fi
+fi
+
+if [[ "${1:-}" == "--wait-for-valid" ]]; then
+  validate_config
+  while true; do
+    write_state
+    if [[ "$LAST_SAMPLE_VALID" == "1" ]]; then
+      exit 0
+    fi
+    sleep "$POLL_INTERVAL"
+  done
 fi
 
 validate_config

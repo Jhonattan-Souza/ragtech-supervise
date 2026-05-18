@@ -5,6 +5,7 @@ UPS_NAME="${UPS_NAME:-ragtech}"
 DEV_PATH="${DEV_PATH:-/run/nut/ragtech.dev}"
 NUT_MONITOR_USER="${NUT_MONITOR_USER:-monuser}"
 NUT_MONITOR_PASSWORD="${NUT_MONITOR_PASSWORD:-}"
+NUT_MONITOR_ROLE="${NUT_MONITOR_ROLE:-secondary}"
 NUT_LISTEN_ADDRESS="${NUT_LISTEN_ADDRESS:-0.0.0.0}"
 
 if [[ -z "$NUT_MONITOR_PASSWORD" ]]; then
@@ -49,6 +50,7 @@ validate_config_token() {
     || "$value" == *"#"* \
     || "$value" == *"["* \
     || "$value" == *"]"* \
+    || "$value" == *"="* \
     || "$value" == *'"'* \
     || "$value" == *\\* ]]; then
     echo "[entrypoint] $name must not contain whitespace or NUT config metacharacters" >&2
@@ -65,6 +67,7 @@ validate_absolute_config_path() {
     || "$value" == *"#"* \
     || "$value" == *"["* \
     || "$value" == *"]"* \
+    || "$value" == *"="* \
     || "$value" == *'"'* \
     || "$value" == *\\* ]]; then
     echo "[entrypoint] $name must be an absolute path without whitespace or NUT config metacharacters" >&2
@@ -74,6 +77,10 @@ validate_absolute_config_path() {
 
 validate_ups_name
 validate_section_name "NUT_MONITOR_USER" "$NUT_MONITOR_USER"
+if [[ "$NUT_MONITOR_ROLE" != "primary" && "$NUT_MONITOR_ROLE" != "secondary" ]]; then
+  echo "[entrypoint] NUT_MONITOR_ROLE must be primary or secondary" >&2
+  exit 1
+fi
 validate_no_newline "NUT_MONITOR_PASSWORD" "$NUT_MONITOR_PASSWORD"
 validate_config_token "NUT_MONITOR_PASSWORD" "$NUT_MONITOR_PASSWORD"
 validate_absolute_config_path "DEV_PATH" "$DEV_PATH"
@@ -101,17 +108,17 @@ EOF
 cat >/etc/nut/upsd.users <<EOF
 [$NUT_MONITOR_USER]
   password = $NUT_MONITOR_PASSWORD
-  upsmon primary
+  upsmon $NUT_MONITOR_ROLE
 EOF
 
 chmod 0640 /etc/nut/upsd.users
 chown -R root:nut /etc/nut
 
-echo "[entrypoint] generating initial dummy-ups file at $DEV_PATH"
-ragtech-to-nut --once
+echo "[entrypoint] waiting for valid Ragtech telemetry"
+ragtech-to-nut --wait-for-valid
 
 echo "[entrypoint] starting Ragtech SQLite exporter"
-ragtech-to-nut &
+RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN=1 EXIT_ON_INVALID_AFTER_LIVE=1 REQUIRE_FRESH_SAMPLE=0 ragtech-to-nut &
 exporter_pid=$!
 upsd_pid=""
 

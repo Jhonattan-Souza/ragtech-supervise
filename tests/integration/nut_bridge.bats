@@ -24,7 +24,7 @@ teardown() {
 }
 
 upsc_from_network() {
-  docker run --rm --network "$network" "$test_image" \
+  timeout 10 docker run --rm --network "$network" "$test_image" \
     upsc "ragtech@$bridge_name:3493" "$1"
 }
 
@@ -56,6 +56,26 @@ wait_for_upsc_contains() {
   done
 
   printf 'timed out waiting for %s to contain %s\n' "$key" "$expected" >&2
+  docker logs "$bridge_name" >&2 || true
+  return 1
+}
+
+wait_for_container_exit() {
+  local expected_status="$1"
+
+  for _ in $(seq 1 60); do
+    running="$(docker inspect -f '{{.State.Running}}' "$bridge_name" 2>/dev/null || printf false)"
+    if [[ "$running" == "false" ]]; then
+      status="$(docker inspect -f '{{.State.ExitCode}}' "$bridge_name")"
+      [[ "$status" == "$expected_status" ]] && return 0
+      printf 'expected container exit status %s, got %s\n' "$expected_status" "$status" >&2
+      docker logs "$bridge_name" >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+
+  printf 'timed out waiting for container exit status %s\n' "$expected_status" >&2
   docker logs "$bridge_name" >&2 || true
   return 1
 }
@@ -105,7 +125,7 @@ wait_for_upsc_contains() {
 @test "NUT bridge exposes alarm, low battery, and stale-source semantics through upsc" {
   create_ragtech_schema "$db"
   insert_device "$db" ups-integration 1000 "Ragtech Integration UPS" "9.9"
-  SAMPLE_ID=ups-integration SAMPLE_DT=1000 SAMPLE_EVENT=7 SAMPLE_CONNECTED=0 insert_sample "$db" EVENTLOG
+  SAMPLE_ID=ups-integration SAMPLE_DT=1000 SAMPLE_EVENT=7 insert_sample "$db" EVENTLOG
 
   docker build -f "$REPO_ROOT/nut-bridge/Dockerfile" -t "$bridge_image" "$REPO_ROOT"
   docker network create "$network"
@@ -115,19 +135,16 @@ wait_for_upsc_contains() {
     -v "$data_dir:/data" \
     -e NUT_MONITOR_PASSWORD=integration-secret \
     -e REQUIRE_FRESH_SAMPLE=0 \
-    -e MAX_SAMPLE_AGE=2 \
+    -e MAX_SAMPLE_AGE=10 \
     -e POLL_INTERVAL=1 \
     "$bridge_image"
 
-  wait_for_upsc_contains ups.status NOCOMM
-  [[ "$(upsc_from_network ups.alarm)" == "Ragtech Supervise reports UPS disconnected" ]]
-  [[ "$(upsc_from_network experimental.ragtech.connection.status)" == "disconnected" ]]
+  wait_for_upsc_value ups.status OL
 
   SAMPLE_ID=ups-integration SAMPLE_DT=1001 SAMPLE_EVENT=8 SAMPLE_OP_BATTERY=1 SAMPLE_LO_BATTERY=1 insert_sample "$db" EVENTLOG
   wait_for_upsc_value ups.status "OB DISCHRG LB"
+  [[ "$(upsc_from_network battery.charger.status)" == "discharging" ]]
   [[ "$(upsc_from_network experimental.ragtech.connection.status)" == "connected" ]]
 
-  wait_for_upsc_value experimental.ragtech.sample.valid 0
-  wait_for_upsc_contains ups.status NOCOMM
-  [[ "$(upsc_from_network ups.alarm)" == "Ragtech telemetry unavailable: stale-source-sample" ]]
+  wait_for_container_exit 75
 }

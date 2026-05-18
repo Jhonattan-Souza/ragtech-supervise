@@ -23,6 +23,8 @@ run_exporter_once() {
     REQUIRE_FRESH_SAMPLE="${REQUIRE_FRESH_SAMPLE:-0}" \
     MAX_SAMPLE_AGE="${MAX_SAMPLE_AGE:-30}" \
     BATTERY_CHARGE_LOW="${BATTERY_CHARGE_LOW:-20}" \
+    EXIT_ON_INVALID_AFTER_LIVE="${EXIT_ON_INVALID_AFTER_LIVE:-0}" \
+    RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN="${RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN:-0}" \
     bash "$REPO_ROOT/nut-bridge/ragtech-to-nut.sh" --once
 }
 
@@ -69,9 +71,9 @@ seed_live_sample() {
   assert_success
   assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
-  assert_nut_value "$dev" "ups.status" "NOCOMM"
   assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: database-unreadable"
   assert_file_contains "$dev" "ALARM [Ragtech telemetry unavailable: database-unreadable]"
+  refute_file_contains "$dev" "ups.status:"
 }
 
 @test "missing SQLite tables reports query-failed" {
@@ -111,6 +113,32 @@ seed_live_sample() {
   assert_nut_value "$dev" "experimental.ragtech.sample.time" "1001"
 }
 
+@test "wait-for-valid mode exits only after a fresh sample is accepted" {
+  seed_live_sample
+
+  DB_PATH="$db" DEV_PATH="$dev" REQUIRE_FRESH_SAMPLE=1 MAX_SAMPLE_AGE=0 POLL_INTERVAL=1 \
+    bash "$REPO_ROOT/nut-bridge/ragtech-to-nut.sh" --wait-for-valid &
+  exporter_pid=$!
+
+  wait_for_file_contains "$dev" "experimental.ragtech.bridge.reason: stale-startup-sample"
+  kill -0 "$exporter_pid"
+
+  SAMPLE_DT=1001 SAMPLE_EVENT=2 insert_sample "$db" EVENTLOG
+
+  for _ in $(seq 1 30); do
+    if ! kill -0 "$exporter_pid" >/dev/null 2>&1; then
+      wait "$exporter_pid"
+      exporter_pid=""
+      assert_nut_value "$dev" "experimental.ragtech.sample.valid" "1"
+      assert_nut_value "$dev" "experimental.ragtech.sample.time" "1001"
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  return 1
+}
+
 @test "invalid MAX_SAMPLE_AGE exits with a clear error" {
   seed_live_sample
 
@@ -143,6 +171,15 @@ seed_live_sample() {
 
   assert_failure
   assert_output_contains "REQUIRE_FRESH_SAMPLE must be 0 or 1"
+}
+
+@test "invalid initial live sample flag exits with a clear error" {
+  seed_live_sample
+
+  RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN=maybe run_exporter_once
+
+  assert_failure
+  assert_output_contains "RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN must be 0 or 1"
 }
 
 @test "SQLite read uses a busy timeout and retries a transient failure" {
@@ -181,6 +218,7 @@ seed_live_sample() {
   SAMPLE_DT=1001 SAMPLE_EVENT=2 SAMPLE_OP_BATTERY=1 insert_sample "$db" EVENTLOG
   run_exporter_once
   assert_nut_value "$dev" "ups.status" "OB DISCHRG"
+  assert_nut_value "$dev" "battery.charger.status" "discharging"
 
   SAMPLE_DT=1002 SAMPLE_EVENT=3 SAMPLE_OP_BATTERY=1 SAMPLE_LO_BATTERY=1 insert_sample "$db" EVENTLOG
   run_exporter_once
@@ -198,10 +236,37 @@ seed_live_sample() {
 
   SAMPLE_DT=1005 SAMPLE_EVENT=6 SAMPLE_CONNECTED=0 insert_sample "$db" EVENTLOG
   run_exporter_once
-  assert_nut_value "$dev" "ups.status" "NOCOMM"
-  assert_nut_value "$dev" "ups.alarm" "Ragtech Supervise reports UPS disconnected"
+  assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: ups-disconnected"
   assert_nut_value "$dev" "experimental.ragtech.connection.status" "disconnected"
-  assert_file_contains "$dev" "ALARM [Ragtech Supervise reports UPS disconnected]"
+  assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "ups-disconnected"
+  refute_file_contains "$dev" "ups.status:"
+}
+
+@test "long-running exporter exits after live telemetry becomes invalid" {
+  seed_live_sample
+
+  DB_PATH="$db" DEV_PATH="$dev" REQUIRE_FRESH_SAMPLE=0 MAX_SAMPLE_AGE=1 POLL_INTERVAL=1 EXIT_ON_INVALID_AFTER_LIVE=1 \
+    bash "$REPO_ROOT/nut-bridge/ragtech-to-nut.sh" &
+  exporter_pid=$!
+
+  wait_for_file_contains "$dev" "experimental.ragtech.sample.valid: 1"
+  wait_for_file_contains "$dev" "experimental.ragtech.bridge.reason: stale-source-sample" 20
+
+  set +e
+  wait "$exporter_pid"
+  status=$?
+  set -e
+  exporter_pid=""
+  [[ "$status" -eq 75 ]]
+}
+
+@test "exporter exits on first invalid sample when startup already served live telemetry" {
+  EXIT_ON_INVALID_AFTER_LIVE=1 RAGTECH_NUT_INITIAL_LIVE_SAMPLE_SEEN=1 run_exporter_once
+
+  assert_failure
+  [[ "$status" -eq 75 ]]
+  assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
+  assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
 }
 
 @test "warning and fault alarms are combined in alarm text" {
@@ -248,6 +313,20 @@ seed_live_sample() {
   assert_nut_value "$dev" "battery.voltage" ""
   assert_nut_value "$dev" "ups.power.nominal" ""
   assert_nut_value "$dev" "ups.load" "70"
+}
+
+@test "SQLite string values are sanitized before writing dummy-ups state" {
+  create_ragtech_schema "$db"
+  insert_device "$db" $'ups\nINJECT: bad' 1000 $'Model\rups.status: OB LB' $'1.2.3\nALARM [bad]'
+  SAMPLE_ID=$'ups\nINJECT: bad' insert_sample "$db" EVENTLOG
+
+  run_exporter_once
+
+  assert_success
+  assert_nut_value "$dev" "device.serial" "upsINJECT: bad"
+  assert_nut_value "$dev" "device.model" "Modelups.status: OB LB"
+  assert_nut_value "$dev" "ups.firmware" "1.2.3ALARM [bad]"
+  ! grep -Fxq "ups.status: OB LB" "$dev"
 }
 
 @test "load derivation prefers apparent output when percent-like power disagrees" {

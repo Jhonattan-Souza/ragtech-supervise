@@ -74,17 +74,19 @@ $ docker run -d --name ragtech-nut-bridge \
     -v ./ragtech-data:/data \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    -e NUT_MONITOR_ROLE=secondary \
     ragtech-nut-bridge:local
 ```
 
-`NUT_MONITOR_PASSWORD` is required. The bridge refuses to start without an explicit password because
-the user has `upsmon primary` rights. NUT variable reads with `upsc` are not authenticated by that
-password, so publishing port `3493` on a LAN address exposes UPS telemetry to clients that can reach
-the port. The examples bind the host port to `127.0.0.1`; publish more broadly only when Docker
-networking or firewall rules already provide the intended access boundary.
+`NUT_MONITOR_PASSWORD` is required. `NUT_MONITOR_ROLE` defaults to `secondary`, which is appropriate
+for remote consumers that only follow the bridge over the network. Use `primary` only when that
+client owns the final local UPS shutdown path. NUT variable reads with `upsc` are not authenticated
+by that password, so publishing port `3493` on a LAN address exposes UPS telemetry to clients that
+can reach the port. The examples bind the host port to `127.0.0.1`; publish more broadly only when
+Docker networking or firewall rules already provide the intended access boundary.
 
-Generated NUT config values are intentionally kept unquoted. Passwords may include `=` padding, but
-avoid whitespace, quotes, backslashes, `#`, and section brackets because those are parser-sensitive.
+Generated NUT config values are intentionally kept unquoted. Avoid whitespace, `=`, quotes,
+backslashes, `#`, and section brackets because those are parser-sensitive.
 
 Inside the container, `upsd` listens on `NUT_LISTEN_ADDRESS`, defaulting to `0.0.0.0` so Docker
 network clients can reach it. Override `NUT_LISTEN_ADDRESS` only for runtimes where binding inside
@@ -97,11 +99,12 @@ if you intentionally want to expose the last persisted sample before Supervise w
 
 After a sample has been accepted, the bridge also requires the SQLite source row to change within
 `MAX_SAMPLE_AGE` seconds, defaulting to `30`. When the database is unreadable, has no current row,
-or the current row is stale, the generated dummy-ups file reports `ups.status=NOCOMM`, publishes
-`ups.alarm`, emits an `ALARM [...]` directive for dummy-ups versions that support it, and sets
-`experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Set
-`MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep the same latest row for long
-periods.
+or the current row is stale, the generated dummy-ups file publishes `ups.alarm`, emits an
+`ALARM [...]` directive for dummy-ups versions that support it, and sets
+`experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Once
+NUT is serving a live sample, later invalid telemetry makes the exporter exit so the container stops
+serving stale UPS state. Set `MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep
+the same latest row for long periods.
 
 Current Debian/NUT `dummy-ups` does not expose `ALARM [...]` as `ups.alarm`, so the bridge writes
 `ups.alarm` directly and keeps the directive for newer implementations.
@@ -124,6 +127,7 @@ $ docker run -d --name ragtech-nut-bridge \
     -v ./ragtech-data:/data \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    -e NUT_MONITOR_ROLE=secondary \
     ragtech-nut-bridge:local
 ```
 
@@ -137,6 +141,7 @@ $ docker run -d --name ragtech-nut-bridge \
     -p 127.0.0.1:3494:3493 \
     -e NUT_MONITOR_USER=monuser \
     -e NUT_MONITOR_PASSWORD='replace-with-a-strong-password' \
+    -e NUT_MONITOR_ROLE=secondary \
     ragtech-nut-bridge:local
 ```
 
@@ -158,6 +163,7 @@ The bridge maps the latest Supervise sample as follows:
 | --- | --- |
 | `ups.status` | `flag_connected`, `flag_opBattery`, `flag_noVInput`, `flag_loBattery`, `fail_endBattery`, `flag_hiPOutput`, `fail_overload`, `flag_noBattery`, `var_cBattery` |
 | `battery.charge` | `var_cBattery` |
+| `battery.charger.status` | `flag_opBattery`, `flag_noVInput` |
 | `battery.voltage` | `var_vBattery` |
 | `input.voltage` | `var_vInput` |
 | `output.voltage` | `var_vOutput` |
@@ -167,10 +173,8 @@ The bridge maps the latest Supervise sample as follows:
 | `ups.power.nominal` | `var_nominalPOutput` |
 | `ups.alarm` | warning/fault flags and unavailable telemetry reasons |
 
-When Supervise reports the UPS as disconnected, the bridge keeps the SQLite sample valid but
-emits an alarm directive with `experimental.ragtech.connection.status=disconnected`. Standard NUT
-clients will see `ups.status=NOCOMM` and `ups.alarm` instead of seeing disconnected or unavailable
-telemetry as `OL`.
+When Supervise reports the UPS as disconnected, the bridge treats telemetry as invalid and stops
+serving the virtual UPS after writing `experimental.ragtech.connection.status=disconnected`.
 
 ## Tests
 
