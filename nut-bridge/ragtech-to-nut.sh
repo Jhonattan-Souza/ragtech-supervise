@@ -6,7 +6,10 @@ DEV_PATH="${DEV_PATH:-/run/nut/ragtech.dev}"
 POLL_INTERVAL="${POLL_INTERVAL:-2}"
 BATTERY_CHARGE_LOW="${BATTERY_CHARGE_LOW:-20}"
 UPS_NAME="${UPS_NAME:-ragtech}"
+REQUIRE_FRESH_SAMPLE="${REQUIRE_FRESH_SAMPLE:-1}"
 SQLITE_SEPARATOR=$'\x1f'
+STARTUP_SAMPLE_SEEN=0
+STARTUP_SAMPLE_TOKEN=""
 
 clamp_charge() {
   awk -v value="${1:-0}" 'BEGIN {
@@ -22,6 +25,60 @@ format_number() {
 
 is_number() {
   [[ "${1:-}" =~ ^-?[0-9]+([.][0-9]+)?$ ]]
+}
+
+write_empty_live_values() {
+  local name
+
+  for name in \
+    device.serial \
+    ups.serial \
+    ups.firmware \
+    ups.load \
+    ups.power.nominal \
+    battery.charge \
+    battery.voltage \
+    battery.voltage.nominal \
+    input.voltage \
+    input.voltage.nominal \
+    output.voltage \
+    output.voltage.nominal \
+    output.current \
+    output.frequency \
+    output.frequency.nominal \
+    ups.temperature \
+    ragtech.event \
+    ragtech.sample.source \
+    ragtech.sample.time; do
+    printf '%s: \n' "$name"
+  done
+}
+
+has_fresh_start_sample() {
+  local sample_token="${1:-}"
+
+  if [[ "$REQUIRE_FRESH_SAMPLE" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ "$STARTUP_SAMPLE_SEEN" != "1" ]]; then
+    STARTUP_SAMPLE_TOKEN="$sample_token"
+    STARTUP_SAMPLE_SEEN=1
+    return 1
+  fi
+
+  [[ "$sample_token" != "$STARTUP_SAMPLE_TOKEN" ]]
+}
+
+build_sample_token() {
+  local token="" separator="" field
+
+  for field in "$@"; do
+    token+="$separator$field"
+    separator="$SQLITE_SEPARATOR"
+  done
+
+  printf '%s' "$token"
 }
 
 output_load_percent() {
@@ -62,25 +119,32 @@ output_load_percent() {
 }
 
 write_unknown_state() {
+  local reason="${1:-no-current-sample}"
   local tmp
   tmp="$(mktemp "${DEV_PATH}.XXXXXX")"
-  cat >"$tmp" <<EOF
+  {
+    cat <<EOF
 device.mfr: Ragtech
 device.model: Supervise
 device.type: ups
 ups.mfr: Ragtech
 ups.model: Supervise
-ups.status: OFF
-ALARM [Ragtech Supervise SQLite database has no current UPS sample]
+ups.status: OL
 battery.charge.low: $BATTERY_CHARGE_LOW
+ragtech.sample.valid: 0
+ragtech.connection.status: unavailable
+ragtech.bridge.reason: $reason
 EOF
+    write_empty_live_values
+    printf 'ALARM\n'
+  } >"$tmp"
   chmod 0644 "$tmp"
   mv "$tmp" "$DEV_PATH"
 }
 
 write_state() {
   if [[ ! -r "$DB_PATH" ]]; then
-    write_unknown_state
+    write_unknown_state "database-unreadable"
     return
   fi
 
@@ -197,13 +261,13 @@ LIMIT 1;"
   if ! row="$(sqlite3 -batch -noheader -separator "$SQLITE_SEPARATOR" "$DB_PATH" "$query" 2>"$query_error")"; then
     echo "[ragtech-to-nut] failed to read $DB_PATH: $(tr '\n' ' ' <"$query_error")" >&2
     rm -f "$query_error"
-    write_unknown_state
+    write_unknown_state "query-failed"
     return
   fi
   rm -f "$query_error"
 
   if [[ -z "$row" ]]; then
-    write_unknown_state
+    write_unknown_state "no-current-sample"
     return
   fi
 
@@ -218,21 +282,37 @@ LIMIT 1;"
     flag_connected flag_op_battery flag_op_warning flag_no_v_input flag_lo_battery \
     flag_hi_p_output flag_no_battery fail_overload fail_end_battery model version <<<"$row"
 
-  local charge status alarm tmp is_connected
+  local charge status alarm tmp is_connected connection_status sample_token
+
+  sample_token="$(build_sample_token \
+    "$id" "$dt" "$event" "$sample_source" "$v_input" "$v_output" "$i_output" \
+    "$p_output" "$f_output" "$v_battery" "$c_battery" "$temperature" \
+    "$nominal_v_input" "$nominal_v_output" "$nominal_p_output" "$nominal_f_output" \
+    "$nominal_v_battery" "$flag_connected" "$flag_op_battery" "$flag_op_warning" \
+    "$flag_no_v_input" "$flag_lo_battery" "$flag_hi_p_output" "$flag_no_battery" \
+    "$fail_overload" "$fail_end_battery")"
+  if ! has_fresh_start_sample "$sample_token"; then
+    write_unknown_state "stale-startup-sample"
+    return
+  fi
+
   charge="$(clamp_charge "$c_battery")"
   is_connected=0
+  connection_status="disconnected"
 
   if [[ "${flag_connected:-0}" != "1" ]]; then
-    status="OFF"
-    alarm="Ragtech Supervise reports UPS disconnected"
+    status="OL"
+    alarm=""
   elif [[ "${flag_op_battery:-0}" == "1" || "${flag_no_v_input:-0}" == "1" ]]; then
     status="OB DISCHRG"
     alarm=""
     is_connected=1
+    connection_status="connected"
   else
     status="OL"
     alarm=""
     is_connected=1
+    connection_status="connected"
   fi
 
   if [[ "$is_connected" == "1" ]]; then
@@ -243,14 +323,18 @@ LIMIT 1;"
     fi
   fi
 
-  if [[ "${flag_op_warning:-0}" == "1" ]]; then
-    alarm="${alarm:+$alarm; }Ragtech Supervise reports warning"
-  fi
-  if [[ "${flag_hi_p_output:-0}" == "1" || "${fail_overload:-0}" == "1" ]]; then
-    alarm="${alarm:+$alarm; }UPS overload"
-  fi
-  if [[ "${flag_no_battery:-0}" == "1" ]]; then
-    alarm="${alarm:+$alarm; }Battery not detected"
+  if [[ "$is_connected" == "1" ]]; then
+    if [[ "${flag_op_warning:-0}" == "1" ]]; then
+      alarm="${alarm:+$alarm; }Ragtech Supervise reports warning"
+    fi
+    if [[ "${flag_hi_p_output:-0}" == "1" || "${fail_overload:-0}" == "1" ]]; then
+      status="$status OVER"
+      alarm="${alarm:+$alarm; }UPS overload"
+    fi
+    if [[ "${flag_no_battery:-0}" == "1" ]]; then
+      status="$status RB"
+      alarm="${alarm:+$alarm; }Battery not detected"
+    fi
   fi
 
   tmp="$(mktemp "${DEV_PATH}.XXXXXX")"
@@ -281,8 +365,13 @@ LIMIT 1;"
     printf 'ragtech.event: %s\n' "$event"
     printf 'ragtech.sample.source: %s\n' "$sample_source"
     printf 'ragtech.sample.time: %s\n' "$dt"
+    printf 'ragtech.sample.valid: 1\n'
+    printf 'ragtech.connection.status: %s\n' "$connection_status"
+    printf 'ragtech.bridge.reason: live-sample\n'
     if [[ -n "$alarm" ]]; then
       printf 'ALARM [%s]\n' "$alarm"
+    else
+      printf 'ALARM\n'
     fi
   } >"$tmp"
   chmod 0644 "$tmp"

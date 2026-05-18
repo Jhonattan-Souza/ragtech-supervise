@@ -80,6 +80,15 @@ $ docker run -d --name ragtech-nut-bridge \
 `NUT_MONITOR_PASSWORD` is required. The bridge refuses to start without an explicit password because
 the user has `upsmon primary` rights.
 
+By default, the bridge treats the first SQLite sample observed after process startup as a baseline
+and does not expose it as live telemetry. This prevents an old `OB LB` row from being replayed just
+because the SQLite files were touched after the container starts. Set `REQUIRE_FRESH_SAMPLE=0` only
+if you intentionally want to expose the last persisted sample before Supervise writes a new one.
+
+The bridge healthcheck requires `ragtech.sample.valid=1` by default, so a missing or unreadable
+database fails health after Docker's startup grace. Set `HEALTHCHECK_REQUIRE_VALID_SAMPLE=0` if you
+need the container healthcheck to ignore telemetry validity and only verify the NUT service itself.
+
 The `/data` mount is intentionally read-write. The bridge only reads Supervise data, but SQLite WAL
 readers may need to update lock/shared-memory state while reading the live database.
 
@@ -121,11 +130,11 @@ Or, when published on host port `3494`:
 $ upsc ragtech@localhost:3494
 ```
 
-The bridge maps the latest `EVENTLOG` row as follows:
+The bridge maps the latest Supervise sample as follows:
 
 | NUT variable | Supervise column |
 | --- | --- |
-| `ups.status` | `flag_opBattery`, `flag_noVInput`, `flag_loBattery`, `fail_endBattery` |
+| `ups.status` | `flag_connected`, `flag_opBattery`, `flag_noVInput`, `flag_loBattery`, `fail_endBattery`, `flag_hiPOutput`, `fail_overload`, `flag_noBattery`, `var_cBattery` |
 | `battery.charge` | `var_cBattery` |
 | `battery.voltage` | `var_vBattery` |
 | `input.voltage` | `var_vInput` |
@@ -137,7 +146,9 @@ The bridge maps the latest `EVENTLOG` row as follows:
 | `ups.alarm` | emitted with `ALARM` directives from warning/fault flags |
 
 When Supervise reports the UPS as disconnected or the database has no current sample, the bridge
-publishes `OFF` with an alarm and does not publish the NUT `LB` low-battery flag.
+publishes a non-critical `OL` status with `ragtech.connection.status`/`ragtech.sample.valid`
+metadata. It intentionally does not publish `OFF`, `OB`, `LB`, or a NUT `ALARM` for unavailable
+telemetry, because NUT clients can treat those states as power-failure inputs.
 
 ## License
 
