@@ -159,11 +159,13 @@ $ upsc ragtech@localhost:3494
 
 The bridge maps the latest Supervise sample as follows:
 
+The bridge image builds the checksum-pinned NUT 2.8.5 release from the upstream source archive.
+
 | NUT variable | Supervise column |
 | --- | --- |
 | `ups.status` | `flag_connected`, `flag_opBattery`, `flag_noVInput`, `flag_loBattery`, `fail_endBattery`, `flag_hiPOutput`, `fail_overload`, `flag_noBattery`, `var_cBattery` |
 | `battery.charge` | `var_cBattery` |
-| `battery.charger.status` | `flag_opBattery`, `flag_noVInput` |
+| `battery.charger.status` | `discharging` from `flag_opBattery`/`flag_noVInput`; otherwise `unknown` because Supervise exposes no charge-mode flag |
 | `battery.voltage` | `var_vBattery` |
 | `input.voltage` | `var_vInput` |
 | `output.voltage` | `var_vOutput` |

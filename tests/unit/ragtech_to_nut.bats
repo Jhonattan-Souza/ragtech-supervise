@@ -72,8 +72,7 @@ seed_live_sample() {
   assert_nut_value "$dev" "experimental.ragtech.sample.valid" "0"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "database-unreadable"
   assert_nut_value "$dev" "ups.status" ""
-  assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: database-unreadable"
-  assert_file_contains "$dev" "ALARM [Ragtech telemetry unavailable: database-unreadable]"
+  assert_file_contains "$dev" "ALARM Ragtech telemetry unavailable: database-unreadable"
 }
 
 @test "missing SQLite tables reports query-failed" {
@@ -214,6 +213,8 @@ seed_live_sample() {
   SAMPLE_EVENT=1 insert_sample "$db" EVENTLOG
   run_exporter_once
   assert_nut_value "$dev" "ups.status" "OL"
+  assert_nut_value "$dev" "battery.charger.status" "unknown"
+  assert_file_contains "$dev" "ALARM"
 
   SAMPLE_DT=1001 SAMPLE_EVENT=2 SAMPLE_OP_BATTERY=1 insert_sample "$db" EVENTLOG
   run_exporter_once
@@ -227,16 +228,16 @@ seed_live_sample() {
   SAMPLE_DT=1003 SAMPLE_EVENT=4 SAMPLE_HI_P_OUTPUT=1 insert_sample "$db" EVENTLOG
   run_exporter_once
   assert_nut_value "$dev" "ups.status" "OL OVER"
-  assert_file_contains "$dev" "ALARM [UPS overload]"
+  assert_file_contains "$dev" "ALARM UPS overload"
 
   SAMPLE_DT=1004 SAMPLE_EVENT=5 SAMPLE_NO_BATTERY=1 insert_sample "$db" EVENTLOG
   run_exporter_once
   assert_nut_value "$dev" "ups.status" "OL RB"
-  assert_file_contains "$dev" "ALARM [Battery not detected]"
+  assert_file_contains "$dev" "ALARM Battery not detected"
 
   SAMPLE_DT=1005 SAMPLE_EVENT=6 SAMPLE_CONNECTED=0 insert_sample "$db" EVENTLOG
   run_exporter_once
-  assert_nut_value "$dev" "ups.alarm" "Ragtech telemetry unavailable: ups-disconnected"
+  assert_file_contains "$dev" "ALARM Ragtech telemetry unavailable: ups-disconnected"
   assert_nut_value "$dev" "experimental.ragtech.connection.status" "disconnected"
   assert_nut_value "$dev" "experimental.ragtech.bridge.reason" "ups-disconnected"
   assert_nut_value "$dev" "ups.status" ""
@@ -278,7 +279,7 @@ seed_live_sample() {
 
   assert_success
   assert_nut_value "$dev" "ups.status" "OL OVER RB"
-  assert_file_contains "$dev" "ALARM [Ragtech Supervise reports warning; UPS overload; Battery not detected]"
+  assert_file_contains "$dev" "ALARM Ragtech Supervise reports warning; UPS overload; Battery not detected"
 }
 
 @test "sample selection uses newest row and falls back to HISTLOGHOUR" {
@@ -341,6 +342,8 @@ SQL
   assert_nut_value "$dev" "battery.voltage" ""
   assert_nut_value "$dev" "ups.power.nominal" ""
   assert_nut_value "$dev" "ups.load" "70"
+  assert_file_contains "$dev" 'battery.voltage: ""'
+  assert_file_contains "$dev" 'ups.power.nominal: ""'
 }
 
 @test "numeric awk formatting is forced to C locale" {

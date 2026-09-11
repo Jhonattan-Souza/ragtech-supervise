@@ -7,7 +7,7 @@ Usage: tests/run-in-container.sh [--unit|--integration|--all]
 
 Runs the shell checks and Bats tests in a pinned Debian-based test container.
 --unit is the default and does not require Docker socket access inside the tests.
---integration requires /var/run/docker.sock and starts Docker containers.
+--integration mounts the active Docker context's Unix socket and starts Docker containers.
 EOF
 }
 
@@ -45,11 +45,18 @@ docker_args=(
 )
 
 if [[ "$mode" == "--integration" || "$mode" == "--all" ]]; then
-  if [[ ! -S /var/run/docker.sock ]]; then
-    echo "Docker socket not found at /var/run/docker.sock; integration tests require Docker daemon access." >&2
+  docker_endpoint="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+  if [[ "$docker_endpoint" != unix://* ]]; then
+    echo "Integration tests require a Unix-socket Docker context; active endpoint is $docker_endpoint" >&2
     exit 1
   fi
-  docker_args+=(-v /var/run/docker.sock:/var/run/docker.sock)
+
+  docker_socket="${docker_endpoint#unix://}"
+  if [[ ! -S "$docker_socket" ]]; then
+    echo "Docker socket not found at $docker_socket; integration tests require Docker daemon access." >&2
+    exit 1
+  fi
+  docker_args+=(-v "$docker_socket:/var/run/docker.sock")
 fi
 
 docker "${docker_args[@]}" "$image" tests/run-tests.sh "$mode"

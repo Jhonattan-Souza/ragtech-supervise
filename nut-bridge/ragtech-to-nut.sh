@@ -55,11 +55,22 @@ write_alarm_value() {
   local message="${1:-}"
 
   if [[ -n "$message" ]]; then
-    printf 'ups.alarm: %s\n' "$message"
-    printf 'ALARM [%s]\n' "$message"
+    printf 'ALARM %s\n' "$message"
   else
-    printf 'ups.alarm: \n'
     printf 'ALARM\n'
+  fi
+}
+
+write_dummy_value() {
+  local name="$1"
+  local value="${2:-}"
+
+  if [[ -n "$value" ]]; then
+    printf '%s: %s\n' "$name" "$value"
+  else
+    # A bare "name:" leaves dummy-ups 2.8.1 reusing the previous line's
+    # value. An explicit empty token asks the driver to remove the variable.
+    printf '%s: ""\n' "$name"
   fi
 }
 
@@ -91,7 +102,7 @@ write_empty_live_values() {
     experimental.ragtech.event \
     experimental.ragtech.sample.source \
     experimental.ragtech.sample.time; do
-    printf '%s: \n' "$name"
+    write_dummy_value "$name" ""
   done
 }
 
@@ -411,7 +422,9 @@ LIMIT 1;"
   else
     status="OL"
     alarm=""
-    battery_charger_status=""
+    # Supervise does not expose a distinct charging/floating/resting flag.
+    # Keep the NUT enum valid without claiming a state we cannot observe.
+    battery_charger_status="unknown"
     is_connected=1
     connection_status="connected"
   fi
@@ -446,28 +459,28 @@ LIMIT 1;"
   {
     printf 'device.mfr: Ragtech\n'
     printf 'device.model: %s\n' "$safe_model"
-    printf 'device.serial: %s\n' "$safe_id"
+    write_dummy_value "device.serial" "$safe_id"
     printf 'device.type: ups\n'
     printf 'ups.mfr: Ragtech\n'
     printf 'ups.model: %s\n' "$safe_model"
-    printf 'ups.serial: %s\n' "$safe_id"
-    printf 'ups.firmware: %s\n' "$safe_version"
+    write_dummy_value "ups.serial" "$safe_id"
+    write_dummy_value "ups.firmware" "$safe_version"
     printf 'ups.status: %s\n' "$status"
-    printf 'ups.load: %s\n' "$(output_load_percent "$p_output" "$nominal_p_output" "$v_output" "$i_output")"
-    printf 'ups.power.nominal: %s\n' "$(format_number "$nominal_p_output")"
+    write_dummy_value "ups.load" "$(output_load_percent "$p_output" "$nominal_p_output" "$v_output" "$i_output")"
+    write_dummy_value "ups.power.nominal" "$(format_number "$nominal_p_output")"
     printf 'battery.charge: %s\n' "$charge"
     printf 'battery.charge.low: %s\n' "$BATTERY_CHARGE_LOW"
-    printf 'battery.charger.status: %s\n' "$battery_charger_status"
-    printf 'battery.voltage: %s\n' "$(format_number "$v_battery")"
-    printf 'battery.voltage.nominal: %s\n' "$(format_number "$nominal_v_battery")"
-    printf 'input.voltage: %s\n' "$(format_number "$v_input")"
-    printf 'input.voltage.nominal: %s\n' "$(format_number "$nominal_v_input")"
-    printf 'output.voltage: %s\n' "$(format_number "$v_output")"
-    printf 'output.voltage.nominal: %s\n' "$(format_number "$nominal_v_output")"
-    printf 'output.current: %s\n' "$(format_number "$i_output")"
-    printf 'output.frequency: %s\n' "$(format_number "$f_output")"
-    printf 'output.frequency.nominal: %s\n' "$(format_number "$nominal_f_output")"
-    printf 'ups.temperature: %s\n' "$(format_number "$temperature")"
+    write_dummy_value "battery.charger.status" "$battery_charger_status"
+    write_dummy_value "battery.voltage" "$(format_number "$v_battery")"
+    write_dummy_value "battery.voltage.nominal" "$(format_number "$nominal_v_battery")"
+    write_dummy_value "input.voltage" "$(format_number "$v_input")"
+    write_dummy_value "input.voltage.nominal" "$(format_number "$nominal_v_input")"
+    write_dummy_value "output.voltage" "$(format_number "$v_output")"
+    write_dummy_value "output.voltage.nominal" "$(format_number "$nominal_v_output")"
+    write_dummy_value "output.current" "$(format_number "$i_output")"
+    write_dummy_value "output.frequency" "$(format_number "$f_output")"
+    write_dummy_value "output.frequency.nominal" "$(format_number "$nominal_f_output")"
+    write_dummy_value "ups.temperature" "$(format_number "$temperature")"
     printf 'experimental.ragtech.event: %s\n' "$event"
     printf 'experimental.ragtech.sample.source: %s\n' "$sample_source"
     printf 'experimental.ragtech.sample.time: %s\n' "$dt"

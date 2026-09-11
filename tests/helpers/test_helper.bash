@@ -50,6 +50,7 @@ nut_value() {
     index($0, key ":") == 1 {
       value = substr($0, length(key) + 2)
       sub(/^ /, "", value)
+      if (value == "\"\"") value = ""
       print value
       found = 1
       exit

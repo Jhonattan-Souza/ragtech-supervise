@@ -93,8 +93,7 @@ tmp="$(mktemp /run/nut/ragtech.dev.XXXXXX)"
   printf "%s\n" "experimental.ragtech.sample.valid: 0"
   printf "%s\n" "experimental.ragtech.connection.status: unavailable"
   printf "%s\n" "experimental.ragtech.bridge.reason: integration-invalid"
-  printf "%s\n" "ups.alarm: Ragtech telemetry unavailable: integration-invalid"
-  printf "%s\n" "ALARM [Ragtech telemetry unavailable: integration-invalid]"
+  printf "%s\n" "ALARM Ragtech telemetry unavailable: integration-invalid"
 } >"$tmp"
 chmod 0644 "$tmp"
 mv "$tmp" /run/nut/ragtech.dev
@@ -121,8 +120,12 @@ mv "$tmp" /run/nut/ragtech.dev
   [[ "$(upsc_from_network experimental.ragtech.sample.valid)" == "1" ]]
   [[ "$(upsc_from_network experimental.ragtech.connection.status)" == "connected" ]]
   [[ "$(upsc_from_network battery.charge)" == "91" ]]
+  [[ "$(upsc_from_network battery.charger.status)" == "unknown" ]]
   [[ "$(upsc_from_network input.voltage)" == "126.5" ]]
   [[ "$(upsc_from_network ups.load)" == "25" ]]
+  run upsc_from_network ups.alarm
+  assert_failure
+  [[ "$(upsc_from_network driver.version)" == "2.8.5" ]]
 
   for _ in $(seq 1 30); do
     health="$(docker inspect -f '{{.State.Health.Status}}' "$bridge_name")"
@@ -156,7 +159,7 @@ mv "$tmp" /run/nut/ragtech.dev
 
   wait_for_upsc_value ups.alarm "Ragtech telemetry unavailable: integration-invalid"
   wait_for_upsc_value experimental.ragtech.sample.valid 0
-  wait_for_upsc_value ups.status ""
+  wait_for_upsc_value ups.status ALARM
 }
 
 @test "NUT bridge container fails fast when password is missing" {
