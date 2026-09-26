@@ -39,9 +39,9 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY nut-bridge/Cargo.toml nut-bridge/Cargo.toml
 COPY nut-bridge/src nut-bridge/src
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-  --mount=type=cache,target=/src/target \
-  cargo build --release --locked --package ragtech-nut-bridge --bin ragtech-to-nut && \
+# No RUN --mount cache here: the legacy Docker builder (Debian's docker-cli,
+# used by tests/run-in-container.sh) rejects it; layer caching still applies.
+RUN cargo build --release --locked --package ragtech-nut-bridge --bin ragtech-to-nut && \
   install -D -m 0755 target/release/ragtech-to-nut /out/ragtech-to-nut
 
 FROM ${DEBIAN_IMAGE}
