@@ -197,3 +197,24 @@ mv "$tmp" /run/nut/ragtech.dev
 
   wait_for_container_exit 75
 }
+
+@test "NUT bridge serves database text with parser metacharacters literally" {
+  create_ragtech_schema "$db"
+  insert_device "$db" ups-integration 1000 'Model #1 "Pro" \ x' "9.9"
+  SAMPLE_ID=ups-integration SAMPLE_DT=1000 SAMPLE_EVENT=7 insert_sample "$db" EVENTLOG
+
+  docker build -f "$REPO_ROOT/nut-bridge/Dockerfile" -t "$bridge_image" "$REPO_ROOT"
+  docker network create "$network"
+  docker run -d \
+    --name "$bridge_name" \
+    --network "$network" \
+    -v "$data_dir:/data" \
+    -e NUT_MONITOR_PASSWORD=integration-secret \
+    -e REQUIRE_FRESH_SAMPLE=0 \
+    -e MAX_SAMPLE_AGE=0 \
+    "$bridge_image"
+
+  wait_for_upsc_value ups.status OL
+  [[ "$(upsc_from_network device.model)" == 'Model #1 "Pro" \ x' ]]
+  [[ "$(upsc_from_network ups.firmware)" == "9.9" ]]
+}

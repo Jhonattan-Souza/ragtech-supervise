@@ -1,4 +1,5 @@
 ARG DEBIAN_IMAGE=docker.io/library/debian:trixie-slim@sha256:109e2c65005bf160609e4ba6acf7783752f8502ad218e298253428690b9eaa4b
+ARG RUST_IMAGE=docker.io/library/rust:1.98.1-slim-trixie@sha256:4cd829461bd5c4d511c32e269da9cb8929223b666519d8004e35fc8d1d771ab7
 ARG NUT_VERSION=2.8.5
 ARG NUT_SHA256=18bf32e59eb764b13da3c4fa70384926d7fa584cb31d2fe7f137a570633eeec1
 
@@ -30,11 +31,24 @@ RUN curl -fsSLo /tmp/nut.tar.gz "https://networkupstools.org/source/2.8/nut-${NU
   make -j2 && \
   make DESTDIR=/opt/nut-install install
 
+# The exporter is built natively for each target platform; SQLite is compiled
+# in (rusqlite "bundled"), so the runtime image needs no sqlite3 packages.
+FROM ${RUST_IMAGE} AS exporter-builder
+
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY nut-bridge/Cargo.toml nut-bridge/Cargo.toml
+COPY nut-bridge/src nut-bridge/src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/src/target \
+  cargo build --release --locked --package ragtech-nut-bridge --bin ragtech-to-nut && \
+  install -D -m 0755 target/release/ragtech-to-nut /out/ragtech-to-nut
+
 FROM ${DEBIAN_IMAGE}
 ARG NUT_VERSION
 
 RUN apt-get update && \
-  apt-get install -y --no-install-recommends adduser bash ca-certificates sqlite3 && \
+  apt-get install -y --no-install-recommends adduser bash ca-certificates && \
   apt-get clean autoclean && \
   apt-get autoremove --yes && \
   rm -rf /var/lib/{apt,dpkg,cache,log}/ && \
@@ -45,10 +59,10 @@ COPY --from=nut-builder /opt/nut-install/ /
 RUN ldconfig && \
   test "$(upsd -V 2>&1)" = "Network UPS Tools upsd ${NUT_VERSION} release"
 
-COPY nut-bridge/ragtech-to-nut.sh /usr/local/bin/ragtech-to-nut
+COPY --from=exporter-builder /out/ragtech-to-nut /usr/local/bin/ragtech-to-nut
 COPY nut-bridge/entrypoint.sh /usr/local/bin/ragtech-nut-entrypoint
 COPY nut-bridge/healthcheck.sh /usr/local/bin/ragtech-nut-healthcheck
-RUN chmod +x /usr/local/bin/ragtech-to-nut /usr/local/bin/ragtech-nut-entrypoint /usr/local/bin/ragtech-nut-healthcheck
+RUN chmod +x /usr/local/bin/ragtech-nut-entrypoint /usr/local/bin/ragtech-nut-healthcheck
 
 EXPOSE 3493
 VOLUME /data

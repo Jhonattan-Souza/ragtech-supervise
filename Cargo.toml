@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["nut-bridge"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/Jhonattan-Souza/ragtech-supervise"
+
+# Why each dependency (CODING_STANDARDS.md section 9):
+# - anyhow: error context in the binary (section 4, applications).
+# - rusqlite: replaces the sqlite3 CLI; "bundled" compiles SQLite in so the image
+#   needs no sqlite3 package and cross-arch builds need no system library.
+# - tempfile: same-directory temporary file + atomic rename for the state file,
+#   replacing mktemp + mv; also the test fixtures' temporary directories.
+# - thiserror: typed library errors (section 4, libraries).
+# - proptest (dev): property tests for the status mapping (section 8).
+[workspace.dependencies]
+anyhow = "1.0.104"
+proptest = "1.11.0"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+allow_attributes_without_reason = "deny"
+expect_used = "warn"
+undocumented_unsafe_blocks = "deny"
+unwrap_used = "warn"
+# Selected pedantic lints; the group as a whole is not enabled.
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+doc_markdown = "warn"
+float_cmp = "warn"
+manual_let_else = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+must_use_candidate = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+trivially_copy_pass_by_ref = "warn"
+uninlined_format_args = "warn"

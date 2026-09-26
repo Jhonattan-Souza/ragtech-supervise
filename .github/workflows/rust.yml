@@ -1,0 +1,105 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly fresh-resolution run (see the fresh-deps job).
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  clippy:
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    # Native runners for both shipped architectures; no emulation.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        features: ["", "--no-default-features", "--all-features"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked ${{ matrix.features }}
+
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    # rust-version in Cargo.toml; tested on that exact toolchain.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install 1.85 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.85 test --workspace --locked
+
+  deny:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        checks: [advisories, "bans licenses sources"]
+    # A newly published advisory should not block unrelated changes.
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check ${{ matrix.checks }}
+
+  fresh-deps:
+    # Lockfile policy: this job runs `cargo update` in its own checkout and
+    # never commits the result; updates land as their own pull requests.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup toolchain install
+      - run: cargo update
+      - run: cargo test --workspace --all-features
+
+  bridge-image:
+    # Builds the bridge image natively per architecture and runs the shell,
+    # Bats unit and Docker integration suites against it.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: tests/run-in-container.sh --all
