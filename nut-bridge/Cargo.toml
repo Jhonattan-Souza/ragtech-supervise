@@ -1,0 +1,25 @@
+[package]
+name = "ragtech-nut-bridge"
+version = "0.1.0"
+description = "Exports Ragtech Supervise telemetry from its SQLite database as a NUT dummy-ups state file"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ragtech-to-nut"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+rusqlite.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

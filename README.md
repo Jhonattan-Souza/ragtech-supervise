@@ -52,6 +52,10 @@ This repository also includes an optional NUT bridge container. It reads the sam
 database and exposes a virtual NUT UPS named `ragtech` using the `dummy-ups` driver in
 `dummy-loop` mode, so the running NUT driver keeps rereading the generated state file.
 
+The exporter that turns Supervise samples into that state file, `ragtech-to-nut`, is a Rust program
+in `nut-bridge/`. The bridge image compiles it for the platform being built, so the same Dockerfile
+produces `linux/amd64` and `linux/arm64` images; SQLite is compiled into the exporter.
+
 Run the Supervise container with `/data` mounted on the host:
 
 ```
@@ -98,13 +102,14 @@ because the SQLite files were touched after the container starts. Set `REQUIRE_F
 if you intentionally want to expose the last persisted sample before Supervise writes a new one.
 
 After a sample has been accepted, the bridge also requires the SQLite source row to change within
-`MAX_SAMPLE_AGE` seconds, defaulting to `30`. When the database is unreadable, has no current row,
-or the current row is stale, the generated dummy-ups file publishes `ups.alarm`, emits an
-`ALARM [...]` directive for dummy-ups versions that support it, and sets
-`experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live telemetry. Once
-NUT is serving a live sample, later invalid telemetry makes the exporter exit so the container stops
-serving stale UPS state. Set `MAX_SAMPLE_AGE=0` only if your Supervise database is expected to keep
-the same latest row for long periods.
+`MAX_SAMPLE_AGE` seconds, defaulting to `120` (Supervise 8.9 commits samples in batches about every
+40 seconds, so a shorter limit makes healthy telemetry look stale between batches). When the
+database is unreadable, has no current row, or the current row is stale, the generated dummy-ups
+file publishes `ups.alarm`, emits an `ALARM [...]` directive for dummy-ups versions that support it,
+and sets `experimental.ragtech.sample.valid=0` instead of refreshing old measurements as live
+telemetry. Once NUT is serving a live sample, later invalid telemetry makes the exporter exit so the
+container stops serving stale UPS state. Set `MAX_SAMPLE_AGE=0` only if your Supervise database is
+expected to keep the same latest row for long periods.
 
 Current Debian/NUT `dummy-ups` does not expose `ALARM [...]` as `ups.alarm`, so the bridge writes
 `ups.alarm` directly and keeps the directive for newer implementations.
@@ -179,6 +184,15 @@ When Supervise reports the UPS as disconnected, the bridge treats telemetry as i
 serving the virtual UPS after writing `experimental.ragtech.connection.status=disconnected`.
 
 ## Tests
+
+Run the exporter's Rust test suite with the toolchain pinned in `rust-toolchain.toml`:
+
+```
+$ cargo test --workspace --locked
+```
+
+CI also runs `cargo fmt --check`, Clippy with warnings denied, rustdoc, the MSRV build and
+`cargo deny check` on native `x86_64` and `aarch64` runners; see `.github/workflows/rust.yml`.
 
 Run the fast local validation suite in a containerized Debian test environment:
 
